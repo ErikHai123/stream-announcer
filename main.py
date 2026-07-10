@@ -25,6 +25,10 @@ TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 TIMEZONE = os.environ.get("TIMEZONE", "Europe/Moscow")
 
+# Ссылки на другие площадки, добавляются в конец каждого поста
+TWITCH_URL = "https://www.twitch.tv/atomgit"
+TIKTOK_URL = "https://www.tiktok.com/@atomgit"
+
 STATE_FILE = os.path.join(os.path.dirname(__file__), "posted_ids.json")
 
 
@@ -176,7 +180,12 @@ def main():
             continue
 
         video_link = f"https://www.youtube.com/watch?v={video_id}"
-        caption = f"{text}\n\n{video_link}"
+        caption = (
+            f"{text}\n\n"
+            f"▶️ YouTube: {video_link}\n"
+            f"🟣 Twitch: {TWITCH_URL}\n"
+            f"⬛ TikTok: {TIKTOK_URL}"
+        )
 
         try:
             send_telegram_photo(thumbnail_url, caption)
