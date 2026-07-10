@@ -14,6 +14,7 @@ import random
 import sys
 import urllib.request
 import urllib.parse
+import urllib.error
 from datetime import datetime, timezone
 import zoneinfo
 
@@ -42,8 +43,14 @@ def save_posted_ids(ids):
 def http_get_json(url, params):
     query = urllib.parse.urlencode(params)
     full_url = f"{url}?{query}"
-    with urllib.request.urlopen(full_url) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(full_url) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        error_body = e.read().decode("utf-8")
+        print(f"HTTP {e.code} ошибка при запросе к {url}", file=sys.stderr)
+        print(f"Подробности: {error_body}", file=sys.stderr)
+        raise
 
 
 def find_candidate_videos():
