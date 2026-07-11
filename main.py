@@ -58,24 +58,23 @@ def http_get_json(url, params):
 
 
 def find_candidate_videos():
-    """Ищем upcoming и live стримы на канале."""
-    candidates = []
-    for event_type in ("upcoming", "live"):
-        data = http_get_json(
-            "https://www.googleapis.com/youtube/v3/search",
-            {
-                "part": "snippet",
-                "channelId": YOUTUBE_CHANNEL_ID,
-                "eventType": event_type,
-                "type": "video",
-                "order": "date",
-                "maxResults": 5,
-                "key": YOUTUBE_API_KEY,
-            },
-        )
-        for item in data.get("items", []):
-            candidates.append(item["id"]["videoId"])
-    return list(dict.fromkeys(candidates))  # без дублей, сохраняя порядок
+    """
+    Смотрим последние видео канала (без фильтра eventType, который у YouTube
+    часто обновляется с большой задержкой) и дальше в main() проверяем
+    каждое видео на признаки стрима через liveStreamingDetails.
+    """
+    data = http_get_json(
+        "https://www.googleapis.com/youtube/v3/search",
+        {
+            "part": "snippet",
+            "channelId": YOUTUBE_CHANNEL_ID,
+            "type": "video",
+            "order": "date",
+            "maxResults": 10,
+            "key": YOUTUBE_API_KEY,
+        },
+    )
+    return [item["id"]["videoId"] for item in data.get("items", [])]
 
 
 def get_video_details(video_id):
@@ -163,13 +162,23 @@ def main():
             continue
 
         snippet = details["snippet"]
-        live_details = details.get("liveStreamingDetails", {})
+        live_details = details.get("liveStreamingDetails")
+
+        # Пропускаем обычные видео - это не стрим вообще
+        if not live_details:
+            continue
+
+        is_live = "actualStartTime" in live_details and "actualEndTime" not in live_details
+        is_upcoming = "scheduledStartTime" in live_details and "actualStartTime" not in live_details
+
+        # Пропускаем уже завершившиеся стримы - анонсировать их незачем
+        if not is_live and not is_upcoming:
+            continue
 
         title = snippet["title"]
         channel_title = snippet["channelTitle"]
         thumbnail_url = best_thumbnail(snippet["thumbnails"])
 
-        is_live = "actualStartTime" in live_details
         scheduled_start = live_details.get("scheduledStartTime")
         start_time_str = format_start_time(scheduled_start) if scheduled_start else ""
 
