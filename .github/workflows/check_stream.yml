@@ -3,7 +3,7 @@ name: Check YouTube Stream
 on:
   schedule:
     # Каждые 15 минут. Можно менять частоту (cron в UTC).
-    - cron: "*/15 * * * *"
+   - cron: "*/5 * * * *"
   workflow_dispatch: {}  # позволяет запускать вручную из вкладки Actions
 
 permissions:
