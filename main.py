@@ -197,14 +197,16 @@ def generate_announcement_text(content_type, title, channel_title, start_time_st
     return template.format(channel=channel_title, title=title, when=start_time_str)
 
 
-def send_telegram_photo(photo_url, caption):
-    body = urllib.parse.urlencode(
-        {
-            "chat_id": TELEGRAM_CHAT_ID,
-            "photo": photo_url,
-            "caption": caption,
-        }
-    ).encode("utf-8")
+def send_telegram_photo(photo_url, caption, buttons=None):
+    params = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "photo": photo_url,
+        "caption": caption,
+    }
+    if buttons:
+        params["reply_markup"] = json.dumps({"inline_keyboard": [buttons]})
+
+    body = urllib.parse.urlencode(params).encode("utf-8")
     req = urllib.request.Request(
         f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto",
         data=body,
@@ -297,15 +299,15 @@ def main():
             continue
 
         video_link = f"https://www.youtube.com/watch?v={video_id}"
-        caption = (
-            f"{text}\n\n"
-            f"▶️ YouTube: {video_link}\n"
-            f"🟣 Twitch: {TWITCH_URL}\n"
-            f"⚫️ TikTok: {TIKTOK_URL}"
-        )
+        caption = text
+        buttons = [
+            {"text": "▶️ YouTube", "url": video_link},
+            {"text": "🟣 Twitch", "url": TWITCH_URL},
+            {"text": "⚫️ TikTok", "url": TIKTOK_URL},
+        ]
 
         try:
-            send_telegram_photo(thumbnail_url, caption)
+            send_telegram_photo(thumbnail_url, caption, buttons)
             print(f"Опубликовано: {title} ({video_id})")
         except Exception as e:
             print(f"Ошибка отправки в Telegram для {video_id}: {e}", file=sys.stderr)
