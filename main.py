@@ -16,6 +16,7 @@ import urllib.request
 import urllib.parse
 import urllib.error
 import re
+import time
 from datetime import datetime, timezone
 import zoneinfo
 
@@ -180,6 +181,16 @@ def send_telegram_photo(photo_url, caption):
 # Если видео короче этого значения (в секундах) - считаем его Shorts
 SHORTS_MAX_DURATION_SECONDS = 60
 
+# Не больше стольки постов за один запуск - чтобы не словить лимит Telegram
+# (429 Too Many Requests) и не "заспамить" канал при первом включении новых
+# типов контента. Оставшиеся кандидаты спокойно опубликуются в следующие
+# запуски (каждые 5 минут).
+MAX_POSTS_PER_RUN = 3
+
+# Пауза между отправками сообщений в Telegram (в секундах), чтобы не
+# превышать лимит скорости отправки.
+SECONDS_BETWEEN_POSTS = 3
+
 
 def main():
     posted_ids = load_posted_ids()
@@ -189,6 +200,10 @@ def main():
 
     new_posts = 0
     for video_id in candidates_to_check:
+        if new_posts >= MAX_POSTS_PER_RUN:
+            print(f"Достигнут лимит {MAX_POSTS_PER_RUN} постов за запуск, остальное - в следующий раз")
+            break
+
         details = details_by_id.get(video_id)
         if not details:
             continue
@@ -242,6 +257,7 @@ def main():
 
         posted_ids.add(video_id)
         new_posts += 1
+        time.sleep(SECONDS_BETWEEN_POSTS)
 
     save_posted_ids(posted_ids)
     print(f"Готово. Новых постов: {new_posts}")
