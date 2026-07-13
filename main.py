@@ -241,7 +241,7 @@ def main():
             continue
 
         posted_ids.add(video_id)
-        new_posts 1
+        new_posts += 1
 
     save_posted_ids(posted_ids)
     print(f"Готово. Новых постов: {new_posts}")
