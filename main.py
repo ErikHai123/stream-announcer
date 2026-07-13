@@ -15,6 +15,7 @@ import sys
 import urllib.request
 import urllib.parse
 import urllib.error
+import re
 from datetime import datetime, timezone
 import zoneinfo
 
@@ -70,26 +71,26 @@ def find_candidate_videos():
             "channelId": YOUTUBE_CHANNEL_ID,
             "type": "video",
             "order": "date",
-            "maxResults": 10,
+            "maxResults": 50,
             "key": YOUTUBE_API_KEY,
         },
     )
     return [item["id"]["videoId"] for item in data.get("items", [])]
 
 
-def get_video_details(video_id):
+def get_video_details_batch(video_ids):
+    """Получаем данные сразу по всем видео одним запросом (экономит квоту API)."""
+    if not video_ids:
+        return {}
     data = http_get_json(
         "https://www.googleapis.com/youtube/v3/videos",
         {
-            "part": "snippet,liveStreamingDetails",
-            "id": video_id,
+            "part": "snippet,liveStreamingDetails,contentDetails",
+            "id": ",".join(video_ids),
             "key": YOUTUBE_API_KEY,
         },
     )
-    items = data.get("items", [])
-    if not items:
-        return None
-    return items[0]
+    return {item["id"]: item for item in data.get("items", [])}
 
 
 def best_thumbnail(thumbnails):
@@ -105,6 +106,17 @@ def format_start_time(iso_ts):
     return local.strftime("%d.%m.%Y в %H:%M") + f" ({TIMEZONE.split('/')[-1]})"
 
 
+def parse_duration_seconds(iso_duration):
+    """Переводим длительность вида 'PT1M30S' в количество секунд."""
+    match = re.match(
+        r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", iso_duration or ""
+    )
+    if not match:
+        return 0
+    hours, minutes, seconds = (int(g) if g else 0 for g in match.groups())
+    return hours * 3600 + minutes * 60 + seconds
+
+
 LIVE_TEMPLATES = [
     "🔴 Внимание! {channel} начал стрим прямо сейчас!\n«{title}»\nЗаходи, пока горячо 👇",
     "🔴 Мы уже в эфире! {channel} стримит:\n«{title}»\nПодключайся, будет интересно!",
@@ -117,15 +129,32 @@ UPCOMING_TEMPLATES = [
     "🎬 Готовь чай/кофе — уже {when} стартует «{title}» от {channel}. Не пропусти!",
 ]
 
+VIDEO_TEMPLATES = [
+    "🆕 Новое видео на канале {channel}!\n«{title}»\nСмотри прямо сейчас 👇",
+    "🎬 {channel} выпустил(а) новое видео:\n«{title}»\nНе пропусти!",
+    "📹 Свежий ролик от {channel}: «{title}»\nЗаходи смотреть!",
+]
 
-def generate_announcement_text(title, channel_title, start_time_str, is_live):
-    """Генерируем текст анонса по шаблону (без внешних AI-сервисов, бесплатно)."""
-    if is_live:
-        template = random.choice(LIVE_TEMPLATES)
-        return template.format(channel=channel_title, title=title)
-    else:
-        template = random.choice(UPCOMING_TEMPLATES)
-        return template.format(channel=channel_title, title=title, when=start_time_str)
+SHORTS_TEMPLATES = [
+    "⚡ Новый Shorts от {channel}!\n«{title}»\nБыстро глянь, займёт всего минутку 👇",
+    "🔥 {channel} выпустил(а) новый шортс: «{title}»\nСмотри, пока не пролистал(а)!",
+    "✨ Свежий Shorts: «{title}» от {channel}\nЗаглядывай!",
+]
+
+
+def generate_announcement_text(content_type, title, channel_title, start_time_str=""):
+    """
+    Генерируем текст анонса по шаблону (без внешних AI-сервисов, бесплатно).
+    content_type: 'live', 'upcoming', 'video' или 'shorts'.
+    """
+    templates_map = {
+        "live": LIVE_TEMPLATES,
+        "upcoming": UPCOMING_TEMPLATES,
+        "video": VIDEO_TEMPLATES,
+        "shorts": SHORTS_TEMPLATES,
+    }
+    template = random.choice(templates_map[content_type])
+    return template.format(channel=channel_title, title=title, when=start_time_str)
 
 
 def send_telegram_photo(photo_url, caption):
@@ -148,42 +177,50 @@ def send_telegram_photo(photo_url, caption):
     return result
 
 
+# Если видео короче этого значения (в секундах) - считаем его Shorts
+SHORTS_MAX_DURATION_SECONDS = 60
+
+
 def main():
     posted_ids = load_posted_ids()
     candidates = find_candidate_videos()
+    candidates_to_check = [vid for vid in candidates if vid not in posted_ids]
+    details_by_id = get_video_details_batch(candidates_to_check)
 
     new_posts = 0
-    for video_id in candidates:
-        if video_id in posted_ids:
-            continue
-
-        details = get_video_details(video_id)
+    for video_id in candidates_to_check:
+        details = details_by_id.get(video_id)
         if not details:
             continue
 
         snippet = details["snippet"]
         live_details = details.get("liveStreamingDetails")
-
-        # Пропускаем обычные видео - это не стрим вообще
-        if not live_details:
-            continue
-
-        is_live = "actualStartTime" in live_details and "actualEndTime" not in live_details
-        is_upcoming = "scheduledStartTime" in live_details and "actualStartTime" not in live_details
-
-        # Пропускаем уже завершившиеся стримы - анонсировать их незачем
-        if not is_live and not is_upcoming:
-            continue
+        content_details = details.get("contentDetails", {})
 
         title = snippet["title"]
         channel_title = snippet["channelTitle"]
         thumbnail_url = best_thumbnail(snippet["thumbnails"])
+        start_time_str = ""
 
-        scheduled_start = live_details.get("scheduledStartTime")
-        start_time_str = format_start_time(scheduled_start) if scheduled_start else ""
+        if live_details:
+            # Это стрим (запланированный, идущий или завершённый)
+            is_live = "actualStartTime" in live_details and "actualEndTime" not in live_details
+            is_upcoming = "scheduledStartTime" in live_details and "actualStartTime" not in live_details
+
+            # Пропускаем уже завершившиеся стримы - анонсировать их незачем
+            if not is_live and not is_upcoming:
+                continue
+
+            content_type = "live" if is_live else "upcoming"
+            scheduled_start = live_details.get("scheduledStartTime")
+            start_time_str = format_start_time(scheduled_start) if scheduled_start else ""
+        else:
+            # Это обычное видео или Shorts
+            duration_seconds = parse_duration_seconds(content_details.get("duration", ""))
+            content_type = "shorts" if duration_seconds <= SHORTS_MAX_DURATION_SECONDS else "video"
 
         try:
-            text = generate_announcement_text(title, channel_title, start_time_str, is_live)
+            text = generate_announcement_text(content_type, title, channel_title, start_time_str)
         except Exception as e:
             print(f"Ошибка генерации текста для {video_id}: {e}", file=sys.stderr)
             continue
