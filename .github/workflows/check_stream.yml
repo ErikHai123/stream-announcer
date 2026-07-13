@@ -2,9 +2,14 @@ name: Check YouTube Stream
 
 on:
   schedule:
-    # Каждые 5 минут. Можно менять частоту (cron в UTC).
-   - cron: "*/5 * * * *"
-  workflow_dispatch: {}  # позволяет запускать вручную из вкладки Actions
+    # Каждые 5 минут (минимально возможная частота у GitHub Actions).
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+    inputs:
+      catch_up:
+        description: "Пропустить весь хвост старых видео (ничего не публиковать, только запомнить их)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -28,6 +33,7 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           TIMEZONE: "Europe/Moscow"
+          CATCH_UP_ONLY: ${{ github.event.inputs.catch_up }}
         run: python main.py
 
       - name: Save state (posted_ids.json)
