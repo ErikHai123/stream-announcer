@@ -165,56 +165,90 @@ def parse_duration_seconds(iso_duration):
     return hours * 3600 + minutes * 60 + seconds
 
 
+# Ключевые слова в названии видео -> тематический эмодзи. Проверяется по
+# порядку, используется первое совпадение. Если ничего не подошло - берётся
+# эмодзи по умолчанию (DEFAULT_THEME_EMOJI).
+GAME_EMOJIS = [
+    ("gta", "🚗"),
+    ("гта", "🚗"),
+    ("farcry", "🔫"),
+    ("far cry", "🔫"),
+    ("cyberpunk", "🤖"),
+    ("cs2", "🔫"),
+    ("csgo", "🔫"),
+    ("cs 1.6", "🔫"),
+    ("counter-strike", "🔫"),
+    ("minecraft", "⛏️"),
+    ("майнкрафт", "⛏️"),
+    ("f1", "🏎️"),
+    ("formula", "🏎️"),
+    ("fifa", "⚽"),
+    ("repo", "🤖"),
+    ("battlefield", "💣"),
+]
+
+DEFAULT_THEME_EMOJI = "🔴"
+
+
+def detect_theme_emoji(title):
+    """Определяем тематический эмодзи по ключевым словам в названии видео."""
+    lowered = title.lower()
+    for keyword, emoji in GAME_EMOJIS:
+        if keyword in lowered:
+            return emoji
+    return DEFAULT_THEME_EMOJI
+
+
 LIVE_TEMPLATES = [
-    "🔴 Внимание! {channel} начал стрим прямо сейчас!\n«{title}»\nЗаходи, пока горячо 👇",
-    "🔴 Мы уже в эфире! {channel} стримит:\n«{title}»\nПодключайся, будет интересно!",
-    "🔴 Стрим уже идёт! «{title}» от {channel} — залетай в трансляцию 🚀",
-    "🔴 {channel} в эфире прямо сейчас: «{title}»\nНе тупи, залетай, пока не закончилось!",
-    "🔴 Погнали! {channel} стримит «{title}» уже сейчас — подключайся 👇",
-    "🔴 Лайв уже идёт: «{title}»\nЗаходи к {channel}, будет угарно!",
-    "🔴 {channel} на связи прямо сейчас!\n«{title}»\nЖмякай и залетай в трансляцию",
-    "🔴 Стрим уже кипит! «{title}» от {channel}\nНе пропусти самое интересное",
-    "🔴 Мы в эфире! {channel} — «{title}»\nВрывайся, тут жарко 🔥",
-    "🔴 Уже стримим: «{title}»\n{channel} ждёт тебя в трансляции прямо сейчас!",
+    "{emoji} Внимание! {channel} начал стрим прямо сейчас!\n«{title}»\nЗаходи, пока горячо 👇",
+    "{emoji} Мы уже в эфире! {channel} стримит:\n«{title}»\nПодключайся, будет интересно!",
+    "{emoji} Стрим уже идёт! «{title}» от {channel} — залетай в трансляцию 🚀",
+    "{emoji} {channel} в эфире прямо сейчас: «{title}»\nНе тупи, залетай, пока не закончилось!",
+    "{emoji} Погнали! {channel} стримит «{title}» уже сейчас — подключайся 👇",
+    "{emoji} Лайв уже идёт: «{title}»\nЗаходи к {channel}, будет угарно!",
+    "{emoji} {channel} на связи прямо сейчас!\n«{title}»\nЖмякай и залетай в трансляцию",
+    "{emoji} Стрим уже кипит! «{title}» от {channel}\nНе пропусти самое интересное",
+    "{emoji} Мы в эфире! {channel} — «{title}»\nВрывайся, тут жарко 🔥",
+    "{emoji} Уже стримим: «{title}»\n{channel} ждёт тебя в трансляции прямо сейчас!",
 ]
 
 UPCOMING_TEMPLATES = [
-    "🔴 Скоро стрим! {channel} проведёт трансляцию «{title}»\n🕒 {when}\nСтавь напоминание, чтобы не пропустить!",
-    "🔴 Анонс: «{title}»\nКанал: {channel}\n⏰ Начало: {when}\nЖдём всех на YouTube!",
-    "🔴 Готовь чай/кофе — уже {when} стартует «{title}» от {channel}. Не пропусти!",
-    "🔴 {channel} запланировал(а) стрим «{title}»\n🕒 Старт: {when}\nБудет интересно, залетай!",
-    "🔴 Совсем скоро в эфире: «{title}»\n⏰ {when}\nПодписывайся на уведомление, чтобы не проспать!",
-    "🔴 Внимание, анонс! {channel} выйдет в эфир {when}\nТема: «{title}»",
-    "🔴 Стрим на подходе: «{title}»\n{channel} ждёт тебя {when}, не пропусти!",
-    "🔴 Скоро погнали! {channel} — «{title}»\n🕒 Начало в {when}",
-    "🔴 Запланирован стрим «{title}»\nКанал: {channel} | ⏰ {when}\nСтавь напоминалку!",
-    "🔴 {channel} скоро в эфире!\n«{title}»\n🕒 {when} — будет жарко, не пропусти",
+    "{emoji} Скоро стрим! {channel} проведёт трансляцию «{title}»\n🕒 {when}\nСтавь напоминание, чтобы не пропустить!",
+    "{emoji} Анонс: «{title}»\nКанал: {channel}\n⏰ Начало: {when}\nЖдём всех на YouTube!",
+    "{emoji} Готовь чай/кофе — уже {when} стартует «{title}» от {channel}. Не пропусти!",
+    "{emoji} {channel} запланировал(а) стрим «{title}»\n🕒 Старт: {when}\nБудет интересно, залетай!",
+    "{emoji} Совсем скоро в эфире: «{title}»\n⏰ {when}\nПодписывайся на уведомление, чтобы не проспать!",
+    "{emoji} Внимание, анонс! {channel} выйдет в эфир {when}\nТема: «{title}»",
+    "{emoji} Стрим на подходе: «{title}»\n{channel} ждёт тебя {when}, не пропусти!",
+    "{emoji} Скоро погнали! {channel} — «{title}»\n🕒 Начало в {when}",
+    "{emoji} Запланирован стрим «{title}»\nКанал: {channel} | ⏰ {when}\nСтавь напоминалку!",
+    "{emoji} {channel} скоро в эфире!\n«{title}»\n🕒 {when} — будет жарко, не пропусти",
 ]
 
 VIDEO_TEMPLATES = [
-    "🔴 Новое видео на канале {channel}!\n«{title}»\nСмотри прямо сейчас 👇",
-    "🔴 {channel} выпустил(а) новое видео:\n«{title}»\nНе пропусти!",
-    "🔴 Свежий ролик от {channel}: «{title}»\nЗаходи смотреть!",
-    "🔴 Вышло новое видео: «{title}»\nОт {channel} — залетай глянуть",
-    "🔴 {channel} радует новинкой!\n«{title}»\nСмотри, пока горячее 🔥",
-    "🔴 Свежак на канале: «{title}»\n{channel} уже ждёт тебя на просмотре",
-    "🔴 Новинка от {channel}: «{title}»\nЖмякай и смотри прямо сейчас!",
-    "🔴 Только что вышло: «{title}»\nОт {channel} — не проходи мимо",
-    "🔴 {channel} выложил(а) новое видео «{title}»\nЗалетай, будет интересно!",
-    "🔴 Новый ролик уже на канале: «{title}»\nОт {channel} — заходи смотреть",
+    "{emoji} Новое видео на канале {channel}!\n«{title}»\nСмотри прямо сейчас 👇",
+    "{emoji} {channel} выпустил(а) новое видео:\n«{title}»\nНе пропусти!",
+    "{emoji} Свежий ролик от {channel}: «{title}»\nЗаходи смотреть!",
+    "{emoji} Вышло новое видео: «{title}»\nОт {channel} — залетай глянуть",
+    "{emoji} {channel} радует новинкой!\n«{title}»\nСмотри, пока горячее 🔥",
+    "{emoji} Свежак на канале: «{title}»\n{channel} уже ждёт тебя на просмотре",
+    "{emoji} Новинка от {channel}: «{title}»\nЖмякай и смотри прямо сейчас!",
+    "{emoji} Только что вышло: «{title}»\nОт {channel} — не проходи мимо",
+    "{emoji} {channel} выложил(а) новое видео «{title}»\nЗалетай, будет интересно!",
+    "{emoji} Новый ролик уже на канале: «{title}»\nОт {channel} — заходи смотреть",
 ]
 
 SHORTS_TEMPLATES = [
-    "🔴 Новый Shorts от {channel}!\n«{title}»\nБыстро глянь, займёт всего минутку 👇",
-    "🔴 {channel} выпустил(а) новый шортс: «{title}»\nСмотри, пока не пролистал(а)!",
-    "🔴 Свежий Shorts: «{title}» от {channel}\nЗаглядывай!",
-    "🔴 Мини-ролик от {channel}: «{title}»\nСмотри за 60 секунд!",
-    "🔴 Новый шортс уже тут: «{title}»\nОт {channel} — быстро глянь",
-    "🔴 {channel} радует шортсом!\n«{title}»\nНе пролистывай, зацени",
-    "🔴 Свежак в Shorts: «{title}»\n{channel} ждёт лайк 👍",
-    "🔴 Новый Shorts: «{title}»\nОт {channel} — залетай на минутку",
-    "🔴 {channel} выложил(а) шортс «{title}»\nБыстро и по делу, смотри!",
-    "🔴 Только вышел шортс: «{title}»\nОт {channel} — не пролистывай мимо!",
+    "{emoji} Новый Shorts от {channel}!\n«{title}»\nБыстро глянь, займёт всего минутку 👇",
+    "{emoji} {channel} выпустил(а) новый шортс: «{title}»\nСмотри, пока не пролистал(а)!",
+    "{emoji} Свежий Shorts: «{title}» от {channel}\nЗаглядывай!",
+    "{emoji} Мини-ролик от {channel}: «{title}»\nСмотри за 60 секунд!",
+    "{emoji} Новый шортс уже тут: «{title}»\nОт {channel} — быстро глянь",
+    "{emoji} {channel} радует шортсом!\n«{title}»\nНе пролистывай, зацени",
+    "{emoji} Свежак в Shorts: «{title}»\n{channel} ждёт лайк 👍",
+    "{emoji} Новый Shorts: «{title}»\nОт {channel} — залетай на минутку",
+    "{emoji} {channel} выложил(а) шортс «{title}»\nБыстро и по делу, смотри!",
+    "{emoji} Только вышел шортс: «{title}»\nОт {channel} — не пролистывай мимо!",
 ]
 
 
@@ -230,7 +264,8 @@ def generate_announcement_text(content_type, title, channel_title, start_time_st
         "shorts": SHORTS_TEMPLATES,
     }
     template = random.choice(templates_map[content_type])
-    return template.format(channel=channel_title, title=title, when=start_time_str)
+    emoji = detect_theme_emoji(title)
+    return template.format(channel=channel_title, title=title, when=start_time_str, emoji=emoji)
 
 
 def send_telegram_message(chat_id, text):
