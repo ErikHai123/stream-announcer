@@ -26,6 +26,11 @@ YOUTUBE_CHANNEL_ID = os.environ["YOUTUBE_CHANNEL_ID"]
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 TIMEZONE = os.environ.get("TIMEZONE", "Europe/Moscow")
+TIMEZONE_LABEL = os.environ.get("TIMEZONE_LABEL", "МСК")
+# Второй часовой пояс - показывается вместе с основным только в анонсах
+# стримов (Казахстан, UTC+5, разница +2 часа от МСК)
+SECOND_TIMEZONE = os.environ.get("SECOND_TIMEZONE", "Asia/Almaty")
+SECOND_TIMEZONE_LABEL = os.environ.get("SECOND_TIMEZONE_LABEL", "Казахстан")
 
 # Ссылки на другие площадки, добавляются в конец каждого поста
 TWITCH_URL = "https://www.twitch.tv/atomgit"
@@ -103,8 +108,14 @@ def best_thumbnail(thumbnails):
 
 def format_start_time(iso_ts):
     dt_utc = datetime.fromisoformat(iso_ts.replace("Z", "+00:00")).astimezone(timezone.utc)
+
     local = dt_utc.astimezone(zoneinfo.ZoneInfo(TIMEZONE))
-    return local.strftime("%d.%m.%Y в %H:%M") + f" ({TIMEZONE.split('/')[-1]})"
+    main_str = local.strftime("%d.%m.%Y в %H:%M") + f" ({TIMEZONE_LABEL})"
+
+    second = dt_utc.astimezone(zoneinfo.ZoneInfo(SECOND_TIMEZONE))
+    second_str = second.strftime("%H:%M") + f" ({SECOND_TIMEZONE_LABEL})"
+
+    return f"{main_str} / {second_str}"
 
 
 def parse_duration_seconds(iso_duration):
