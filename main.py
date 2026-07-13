@@ -192,10 +192,27 @@ MAX_POSTS_PER_RUN = 3
 SECONDS_BETWEEN_POSTS = 3
 
 
+# Если переменная окружения CATCH_UP_ONLY=true - бот просто запомнит все
+# найденные видео как "уже показанные", ничего не публикуя. Используется
+# один раз, чтобы пропустить весь старый "хвост" видео/шортсов и начать
+# отслеживать только то, что появится начиная с этого момента.
+CATCH_UP_ONLY = os.environ.get("CATCH_UP_ONLY", "false").lower() == "true"
+
+
 def main():
     posted_ids = load_posted_ids()
     candidates = find_candidate_videos()
     candidates_to_check = [vid for vid in candidates if vid not in posted_ids]
+
+    if CATCH_UP_ONLY:
+        posted_ids.update(candidates_to_check)
+        save_posted_ids(posted_ids)
+        print(
+            f"Режим CATCH_UP_ONLY: помечено как уже показанные - "
+            f"{len(candidates_to_check)} видео. Ничего не опубликовано."
+        )
+        return
+
     details_by_id = get_video_details_batch(candidates_to_check)
 
     new_posts = 0
