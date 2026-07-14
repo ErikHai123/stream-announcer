@@ -324,6 +324,9 @@ def check_subscriber_milestone():
             print(f"Ошибка отправки поздравления: {e}", file=sys.stderr)
             return
         save_last_milestone(current_milestone)
+
+
+def send_telegram_photo(photo_url, caption, buttons=None):
     params = {
         "chat_id": TELEGRAM_CHAT_ID,
         "photo": photo_url,
