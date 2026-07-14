@@ -136,6 +136,9 @@ def get_channel_info():
     count = int(items[0]["statistics"]["subscriberCount"])
     title = items[0]["snippet"]["title"]
     return count, title
+
+
+def best_thumbnail(thumbnails):
     for key in ("maxres", "standard", "high", "medium", "default"):
         if key in thumbnails:
             return thumbnails[key]["url"]
