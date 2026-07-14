@@ -2,8 +2,9 @@ name: Check YouTube Stream
 
 on:
   schedule:
-    # Каждые 5 минут (минимально возможная частота у GitHub Actions).
-    - cron: "*/5 * * * *"
+    # Каждые 5 минут, но только с 6:00 до 24:00 по Москве (03:00-20:59 UTC).
+    # Ночью (0:00-6:00 МСК) бот не запускается вообще.
+    - cron: "*/5 3-20 * * *"
   workflow_dispatch:
     inputs:
       catch_up:
