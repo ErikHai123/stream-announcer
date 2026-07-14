@@ -321,12 +321,38 @@ def check_subscriber_milestone():
     if current_milestone > last_milestone and current_milestone > 0:
         text = random.choice(MILESTONE_TEMPLATES).format(channel=channel_title, count=current_milestone)
         try:
-            send_telegram_message(TELEGRAM_CHAT_ID, text)
+            result = send_telegram_message(TELEGRAM_CHAT_ID, text)
             print(f"Опубликовано поздравление с {current_milestone} подписчиками")
+            try:
+                message_id = result["result"]["message_id"]
+                react_to_message(TELEGRAM_CHAT_ID, message_id, "🎉")
+            except Exception as e:
+                print(f"Не удалось поставить реакцию: {e}", file=sys.stderr)
         except Exception as e:
             print(f"Ошибка отправки поздравления: {e}", file=sys.stderr)
             return
         save_last_milestone(current_milestone)
+
+
+def react_to_message(chat_id, message_id, emoji="🔥"):
+    """Ставим эмодзи-реакцию на уже отправленное сообщение."""
+    body = urllib.parse.urlencode(
+        {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "reaction": json.dumps([{"type": "emoji", "emoji": emoji}]),
+        }
+    ).encode("utf-8")
+    req = urllib.request.Request(
+        f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/setMessageReaction",
+        data=body,
+        method="POST",
+    )
+    with urllib.request.urlopen(req) as resp:
+        result = json.loads(resp.read().decode("utf-8"))
+    if not result.get("ok"):
+        raise RuntimeError(f"Telegram error: {result}")
+    return result
 
 
 def send_telegram_photo(photo_url, caption, buttons=None):
@@ -439,8 +465,13 @@ def main():
         ]
 
         try:
-            send_telegram_photo(thumbnail_url, caption, buttons)
+            result = send_telegram_photo(thumbnail_url, caption, buttons)
             print(f"Опубликовано: {title} ({video_id})")
+            try:
+                message_id = result["result"]["message_id"]
+                react_to_message(TELEGRAM_CHAT_ID, message_id, "🔥")
+            except Exception as e:
+                print(f"Не удалось поставить реакцию: {e}", file=sys.stderr)
         except Exception as e:
             print(f"Ошибка отправки в Telegram для {video_id}: {e}", file=sys.stderr)
             continue
