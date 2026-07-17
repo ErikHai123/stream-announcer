@@ -27,16 +27,12 @@ TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 TIMEZONE = os.environ.get("TIMEZONE", "Europe/Moscow")
 TIMEZONE_LABEL = os.environ.get("TIMEZONE_LABEL", "МСК")
-# Второй часовой пояс - показывается вместе с основным только в анонсах
-# стримов (Казахстан, UTC+5, разница +2 часа от МСК)
 SECOND_TIMEZONE = os.environ.get("SECOND_TIMEZONE", "Asia/Almaty")
 SECOND_TIMEZONE_LABEL = os.environ.get("SECOND_TIMEZONE_LABEL", "Казахстан")
 
-# Ссылки на другие площадки, добавляются в конец каждого поста
 TWITCH_URL = "https://www.twitch.tv/atomgit"
 TIKTOK_URL = "https://www.tiktok.com/@atomgit"
 
-# Через сколько подписчиков праздновать (10 000 = каждые 10 тысяч)
 SUBSCRIBER_MILESTONE_STEP = int(os.environ.get("SUBSCRIBER_MILESTONE_STEP", "10000"))
 
 STATE_FILE = os.path.join(os.path.dirname(__file__), "posted_ids.json")
@@ -44,11 +40,6 @@ MILESTONE_STATE_FILE = os.path.join(os.path.dirname(__file__), "milestone_state.
 
 
 def load_last_milestone():
-    """
-    Возвращает (значение, был_ли_файл_уже). Если файла ещё нет - это самый
-    первый запуск этой функции, и поздравлять "задним числом" за уже
-    достигнутый уровень подписчиков не нужно.
-    """
     if os.path.exists(MILESTONE_STATE_FILE):
         with open(MILESTONE_STATE_FILE, "r", encoding="utf-8") as f:
             return json.load(f).get("last_milestone", 0), True
@@ -85,28 +76,47 @@ def http_get_json(url, params):
         raise
 
 
+# ========== ИЗМЕНЕНИЕ 1: Новая функция — получаем ID uploads-плейлиста ==========
+def get_uploads_playlist_id():
+    """Получаем ID плейлиста 'Загруженные' канала (1 юнит API)."""
+    data = http_get_json(
+        "https://www.googleapis.com/youtube/v3/channels",
+        {
+            "part": "contentDetails",
+            "id": YOUTUBE_CHANNEL_ID,
+            "key": YOUTUBE_API_KEY,
+        },
+    )
+    items = data.get("items", [])
+    if not items:
+        return None
+    return items[0]["contentDetails"]["relatedPlaylists"]["uploads"]
+
+
+# ========== ИЗМЕНЕНИЕ 2: Заменили search.list на playlistItems.list ==========
 def find_candidate_videos():
     """
-    Смотрим последние видео канала (без фильтра eventType, который у YouTube
-    часто обновляется с большой задержкой) и дальше в main() проверяем
-    каждое видео на признаки стрима через liveStreamingDetails.
+    Берём последние видео из uploads-плейлиста канала (1 юнит API)
+    вместо search.list (100 юнитов).
     """
+    playlist_id = get_uploads_playlist_id()
+    if not playlist_id:
+        return []
+    
     data = http_get_json(
-        "https://www.googleapis.com/youtube/v3/search",
+        "https://www.googleapis.com/youtube/v3/playlistItems",
         {
             "part": "snippet",
-            "channelId": YOUTUBE_CHANNEL_ID,
-            "type": "video",
-            "order": "date",
+            "playlistId": playlist_id,
             "maxResults": 50,
             "key": YOUTUBE_API_KEY,
         },
     )
-    return [item["id"]["videoId"] for item in data.get("items", [])]
+    return [item["snippet"]["resourceId"]["videoId"] for item in data.get("items", [])]
 
 
 def get_video_details_batch(video_ids):
-    """Получаем данные сразу по всем видео одним запросом (экономит квоту API)."""
+    """Получаем данные сразу по всем видео одним запросом (1 юнит API)."""
     if not video_ids:
         return {}
     data = http_get_json(
@@ -121,7 +131,7 @@ def get_video_details_batch(video_ids):
 
 
 def get_channel_info():
-    """Получаем текущее число подписчиков и название канала."""
+    """Получаем текущее число подписчиков и название канала (1 юнит API)."""
     data = http_get_json(
         "https://www.googleapis.com/youtube/v3/channels",
         {
@@ -158,7 +168,6 @@ def format_start_time(iso_ts):
 
 
 def parse_duration_seconds(iso_duration):
-    """Переводим длительность вида 'PT1M30S' в количество секунд."""
     match = re.match(
         r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", iso_duration or ""
     )
@@ -168,9 +177,6 @@ def parse_duration_seconds(iso_duration):
     return hours * 3600 + minutes * 60 + seconds
 
 
-# Ключевые слова в названии видео -> тематический эмодзи. Проверяется по
-# порядку, используется первое совпадение. Если ничего не подошло - берётся
-# эмодзи по умолчанию (DEFAULT_THEME_EMOJI).
 GAME_EMOJIS = [
     ("gta", "🚗"),
     ("гта", "🚗"),
@@ -194,7 +200,6 @@ DEFAULT_THEME_EMOJI = "🔴"
 
 
 def detect_theme_emoji(title):
-    """Определяем тематический эмодзи по ключевым словам в названии видео."""
     lowered = title.lower()
     for keyword, emoji in GAME_EMOJIS:
         if keyword in lowered:
@@ -256,10 +261,6 @@ SHORTS_TEMPLATES = [
 
 
 def generate_announcement_text(content_type, title, channel_title, start_time_str=""):
-    """
-    Генерируем текст анонса по шаблону (без внешних AI-сервисов, бесплатно).
-    content_type: 'live', 'upcoming', 'video' или 'shorts'.
-    """
     templates_map = {
         "live": LIVE_TEMPLATES,
         "upcoming": UPCOMING_TEMPLATES,
@@ -298,7 +299,6 @@ MILESTONE_TEMPLATES = [
 
 
 def check_subscriber_milestone():
-    """Проверяем, не пересёк ли канал новую круглую отметку подписчиков."""
     try:
         count, channel_title = get_channel_info()
     except Exception as e:
@@ -312,8 +312,6 @@ def check_subscriber_milestone():
     last_milestone, state_existed = load_last_milestone()
 
     if not state_existed:
-        # Самый первый запуск этой функции - просто запоминаем текущий
-        # уровень, не поздравляя за то, что уже было достигнуто раньше.
         save_last_milestone(current_milestone)
         print(f"Отметка подписчиков инициализирована: {current_milestone}")
         return
@@ -335,7 +333,6 @@ def check_subscriber_milestone():
 
 
 def react_to_message(chat_id, message_id, emoji="🔥"):
-    """Ставим эмодзи-реакцию на уже отправленное сообщение."""
     body = urllib.parse.urlencode(
         {
             "chat_id": chat_id,
@@ -377,24 +374,9 @@ def send_telegram_photo(photo_url, caption, buttons=None):
     return result
 
 
-# Если видео короче этого значения (в секундах) - считаем его Shorts
 SHORTS_MAX_DURATION_SECONDS = 60
-
-# Не больше стольки постов за один запуск - чтобы не словить лимит Telegram
-# (429 Too Many Requests) и не "заспамить" канал при первом включении новых
-# типов контента. Оставшиеся кандидаты спокойно опубликуются в следующие
-# запуски (каждые 5 минут).
 MAX_POSTS_PER_RUN = 3
-
-# Пауза между отправками сообщений в Telegram (в секундах), чтобы не
-# превышать лимит скорости отправки.
 SECONDS_BETWEEN_POSTS = 3
-
-
-# Если переменная окружения CATCH_UP_ONLY=true - бот просто запомнит все
-# найденные видео как "уже показанные", ничего не публикуя. Используется
-# один раз, чтобы пропустить весь старый "хвост" видео/шортсов и начать
-# отслеживать только то, что появится начиная с этого момента.
 CATCH_UP_ONLY = os.environ.get("CATCH_UP_ONLY", "false").lower() == "true"
 
 
@@ -434,11 +416,9 @@ def main():
         start_time_str = ""
 
         if live_details:
-            # Это стрим (запланированный, идущий или завершённый)
             is_live = "actualStartTime" in live_details and "actualEndTime" not in live_details
             is_upcoming = "scheduledStartTime" in live_details and "actualStartTime" not in live_details
 
-            # Пропускаем уже завершившиеся стримы - анонсировать их незачем
             if not is_live and not is_upcoming:
                 continue
 
@@ -446,7 +426,6 @@ def main():
             scheduled_start = live_details.get("scheduledStartTime")
             start_time_str = format_start_time(scheduled_start) if scheduled_start else ""
         else:
-            # Это обычное видео или Shorts
             duration_seconds = parse_duration_seconds(content_details.get("duration", ""))
             content_type = "shorts" if duration_seconds <= SHORTS_MAX_DURATION_SECONDS else "video"
 
