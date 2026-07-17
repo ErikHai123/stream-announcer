@@ -1,14 +1,14 @@
 name: Check YouTube Stream
 
 on:
+  # Запуск по расписанию — только раз в час как резерв
   schedule:
-    # Каждую минуту, но только с 6:00 до 24:00 по Москве (03:00-20:59 UTC).
-    # Ночью (0:00-6:00 МСК) бот не запускается вообще.
-    - cron: "*/1 3-20 * * *"
+    - cron: "0 * * * *"
+  # Запуск вручную из GitHub
   workflow_dispatch:
     inputs:
       catch_up:
-        description: "Пропустить весь хвост старых видео (ничего не публиковать, только запомнить их)"
+        description: "Пропустить весь хвост старых видео"
         type: boolean
         default: false
 
@@ -37,7 +37,7 @@ jobs:
           CATCH_UP_ONLY: ${{ github.event.inputs.catch_up }}
         run: python main.py
 
-      - name: Save state (posted_ids.json, milestone_state.json)
+      - name: Save state
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
