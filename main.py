@@ -76,9 +76,7 @@ def http_get_json(url, params):
         raise
 
 
-# ========== ИЗМЕНЕНИЕ 1: Новая функция — получаем ID uploads-плейлиста ==========
 def get_uploads_playlist_id():
-    """Получаем ID плейлиста 'Загруженные' канала (1 юнит API)."""
     data = http_get_json(
         "https://www.googleapis.com/youtube/v3/channels",
         {
@@ -93,12 +91,7 @@ def get_uploads_playlist_id():
     return items[0]["contentDetails"]["relatedPlaylists"]["uploads"]
 
 
-# ========== ИЗМЕНЕНИЕ 2: Заменили search.list на playlistItems.list ==========
 def find_candidate_videos():
-    """
-    Берём последние видео из uploads-плейлиста канала (1 юнит API)
-    вместо search.list (100 юнитов).
-    """
     playlist_id = get_uploads_playlist_id()
     if not playlist_id:
         return []
@@ -116,7 +109,6 @@ def find_candidate_videos():
 
 
 def get_video_details_batch(video_ids):
-    """Получаем данные сразу по всем видео одним запросом (1 юнит API)."""
     if not video_ids:
         return {}
     data = http_get_json(
@@ -131,7 +123,6 @@ def get_video_details_batch(video_ids):
 
 
 def get_channel_info():
-    """Получаем текущее число подписчиков и название канала (1 юнит API)."""
     data = http_get_json(
         "https://www.googleapis.com/youtube/v3/channels",
         {
@@ -352,6 +343,7 @@ def react_to_message(chat_id, message_id, emoji="🔥"):
     return result
 
 
+# ========== ИЗМЕНЕНИЕ: Улучшенное логирование ошибок Telegram ==========
 def send_telegram_photo(photo_url, caption, buttons=None):
     params = {
         "chat_id": TELEGRAM_CHAT_ID,
@@ -367,9 +359,19 @@ def send_telegram_photo(photo_url, caption, buttons=None):
         data=body,
         method="POST",
     )
-    with urllib.request.urlopen(req) as resp:
-        result = json.loads(resp.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(req) as resp:
+            result = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        error_body = e.read().decode("utf-8")
+        print(f"❌ Telegram HTTP {e.code}: {error_body}", file=sys.stderr)
+        print(f"📊 Длина caption: {len(caption)} символов", file=sys.stderr)
+        print(f"🔗 URL фото: {photo_url}", file=sys.stderr)
+        print(f"🔘 Кнопки: {buttons}", file=sys.stderr)
+        raise RuntimeError(f"Telegram error {e.code}: {error_body}")
+    
     if not result.get("ok"):
+        print(f"❌ Telegram API error: {result}", file=sys.stderr)
         raise RuntimeError(f"Telegram error: {result}")
     return result
 
@@ -384,6 +386,9 @@ def main():
     posted_ids = load_posted_ids()
     candidates = find_candidate_videos()
     candidates_to_check = [vid for vid in candidates if vid not in posted_ids]
+
+    print(f"📋 Найдено {len(candidates)} видео в плейлисте")
+    print(f"🆕 Новых (не в posted_ids): {len(candidates_to_check)}")
 
     if CATCH_UP_ONLY:
         posted_ids.update(candidates_to_check)
@@ -404,6 +409,7 @@ def main():
 
         details = details_by_id.get(video_id)
         if not details:
+            print(f"⚠️ Нет деталей для видео {video_id}", file=sys.stderr)
             continue
 
         snippet = details["snippet"]
@@ -420,6 +426,7 @@ def main():
             is_upcoming = "scheduledStartTime" in live_details and "actualStartTime" not in live_details
 
             if not is_live and not is_upcoming:
+                print(f"⏭️ Пропуск завершённого стрима: {title}")
                 continue
 
             content_type = "live" if is_live else "upcoming"
@@ -443,16 +450,20 @@ def main():
             {"text": "⚫️ TikTok", "url": TIKTOK_URL},
         ]
 
+        print(f"📤 Попытка отправки: {title} ({video_id}) | Тип: {content_type}")
+        print(f"   🖼️ Thumbnail: {thumbnail_url}")
+        print(f"   📝 Caption ({len(caption)} симв.): {caption[:100]}...")
+
         try:
             result = send_telegram_photo(thumbnail_url, caption, buttons)
-            print(f"Опубликовано: {title} ({video_id})")
+            print(f"✅ Опубликовано: {title} ({video_id})")
             try:
                 message_id = result["result"]["message_id"]
                 react_to_message(TELEGRAM_CHAT_ID, message_id, "🔥")
             except Exception as e:
                 print(f"Не удалось поставить реакцию: {e}", file=sys.stderr)
         except Exception as e:
-            print(f"Ошибка отправки в Telegram для {video_id}: {e}", file=sys.stderr)
+            print(f"❌ Ошибка отправки в Telegram для {video_id}: {e}", file=sys.stderr)
             continue
 
         posted_ids.add(video_id)
@@ -461,8 +472,6 @@ def main():
 
     save_posted_ids(posted_ids)
     print(f"Готово. Новых постов: {new_posts}")
-
-    check_subscriber_milestone()
 
 
 if __name__ == "__main__":
