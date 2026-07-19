@@ -168,6 +168,24 @@ def parse_duration_seconds(iso_duration):
     return hours * 3600 + minutes * 60 + seconds
 
 
+# ========== НОВОЕ: Вытаскиваем video ID из любой ссылки YouTube ==========
+def extract_video_id(url):
+    """Вытаскиваем video ID из любой ссылки YouTube."""
+    if not url or not url.strip():
+        return None
+    patterns = [
+        r'(?:v=|\/)([0-9A-Za-z_-]{11})',
+        r'(?:embed\/)([0-9A-Za-z_-]{11})',
+        r'(?:youtu\.be\/)([0-9A-Za-z_-]{11})',
+        r'(?:shorts\/)([0-9A-Za-z_-]{11})',
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, url)
+        if match:
+            return match.group(1)
+    return None
+
+
 GAME_EMOJIS = [
     ("gta", "🚗"),
     ("гта", "🚗"),
@@ -343,7 +361,6 @@ def react_to_message(chat_id, message_id, emoji="🔥"):
     return result
 
 
-# ========== ИЗМЕНЕНИЕ: Улучшенное логирование ошибок Telegram ==========
 def send_telegram_photo(photo_url, caption, buttons=None):
     params = {
         "chat_id": TELEGRAM_CHAT_ID,
@@ -382,10 +399,26 @@ SECONDS_BETWEEN_POSTS = 3
 CATCH_UP_ONLY = os.environ.get("CATCH_UP_ONLY", "false").lower() == "true"
 
 
+# ========== НОВОЕ: Принудительная публикация по ссылке ==========
+FORCE_VIDEO_URL = os.environ.get("FORCE_VIDEO_URL", "")
+
+
 def main():
     posted_ids = load_posted_ids()
     candidates = find_candidate_videos()
     candidates_to_check = [vid for vid in candidates if vid not in posted_ids]
+
+    # Если задана принудительная ссылка — добавляем её в начало
+    force_video_id = extract_video_id(FORCE_VIDEO_URL)
+    if force_video_id:
+        print(f"🔗 Принудительная публикация: {force_video_id}")
+        # Удаляем из posted_ids, чтобы бот запостил заново
+        if force_video_id in posted_ids:
+            posted_ids.discard(force_video_id)
+            print(f"🔄 Удалено из posted_ids для повторной публикации")
+        # Добавляем в начало списка на проверку
+        if force_video_id not in candidates_to_check:
+            candidates_to_check.insert(0, force_video_id)
 
     print(f"📋 Найдено {len(candidates)} видео в плейлисте")
     print(f"🆕 Новых (не в posted_ids): {len(candidates_to_check)}")
@@ -472,6 +505,8 @@ def main():
 
     save_posted_ids(posted_ids)
     print(f"Готово. Новых постов: {new_posts}")
+
+    check_subscriber_milestone()
 
 
 if __name__ == "__main__":
