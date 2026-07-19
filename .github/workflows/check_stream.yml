@@ -1,16 +1,18 @@
 name: Check YouTube Stream
 
 on:
-  # Запуск по расписанию — только раз в час как резерв
   schedule:
     - cron: "0 * * * *"
-  # Запуск вручную из GitHub
   workflow_dispatch:
     inputs:
       catch_up:
         description: "Пропустить весь хвост старых видео"
         type: boolean
         default: false
+      force_video_url:
+        description: "Принудительно опубликовать видео по ссылке (оставьте пустым для авто)"
+        type: string
+        default: ""
 
 permissions:
   contents: write
@@ -35,6 +37,7 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           TIMEZONE: "Europe/Moscow"
           CATCH_UP_ONLY: ${{ github.event.inputs.catch_up }}
+          FORCE_VIDEO_URL: ${{ github.event.inputs.force_video_url }}
         run: python main.py
 
       - name: Save state
