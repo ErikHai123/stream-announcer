@@ -63,16 +63,21 @@ def save_posted_ids(ids):
         json.dump(sorted(ids), f, ensure_ascii=False, indent=2)
 
 
-def http_get_json(url, params):
+# ========== ОБНОВЛЕНО: Добавлен timeout и обработка URLError ==========
+def http_get_json(url, params, timeout=15):
     query = urllib.parse.urlencode(params)
     full_url = f"{url}?{query}"
     try:
-        with urllib.request.urlopen(full_url) as resp:
+        req = urllib.request.Request(full_url, method='GET')
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         error_body = e.read().decode("utf-8")
         print(f"HTTP {e.code} ошибка при запросе к {url}", file=sys.stderr)
         print(f"Подробности: {error_body}", file=sys.stderr)
+        raise
+    except urllib.error.URLError as e:
+        print(f"Сетевая ошибка при запросе к {url}: {e.reason}", file=sys.stderr)
         raise
 
 
@@ -168,7 +173,6 @@ def parse_duration_seconds(iso_duration):
     return hours * 3600 + minutes * 60 + seconds
 
 
-# ========== НОВОЕ: Вытаскиваем video ID из любой ссылки YouTube ==========
 def extract_video_id(url):
     """Вытаскиваем video ID из любой ссылки YouTube."""
     if not url or not url.strip():
@@ -281,6 +285,7 @@ def generate_announcement_text(content_type, title, channel_title, start_time_st
     return template.format(channel=channel_title, title=title, when=start_time_str, emoji=emoji)
 
 
+# ========== ОБНОВЛЕНО: Добавлен timeout ==========
 def send_telegram_message(chat_id, text):
     body = urllib.parse.urlencode(
         {
@@ -293,7 +298,7 @@ def send_telegram_message(chat_id, text):
         data=body,
         method="POST",
     )
-    with urllib.request.urlopen(req) as resp:
+    with urllib.request.urlopen(req, timeout=30) as resp:
         result = json.loads(resp.read().decode("utf-8"))
     if not result.get("ok"):
         raise RuntimeError(f"Telegram error: {result}")
@@ -341,6 +346,7 @@ def check_subscriber_milestone():
         save_last_milestone(current_milestone)
 
 
+# ========== ОБНОВЛЕНО: Добавлен timeout ==========
 def react_to_message(chat_id, message_id, emoji="🔥"):
     body = urllib.parse.urlencode(
         {
@@ -354,13 +360,14 @@ def react_to_message(chat_id, message_id, emoji="🔥"):
         data=body,
         method="POST",
     )
-    with urllib.request.urlopen(req) as resp:
+    with urllib.request.urlopen(req, timeout=30) as resp:
         result = json.loads(resp.read().decode("utf-8"))
     if not result.get("ok"):
         raise RuntimeError(f"Telegram error: {result}")
     return result
 
 
+# ========== ОБНОВЛЕНО: Добавлен timeout ==========
 def send_telegram_photo(photo_url, caption, buttons=None):
     params = {
         "chat_id": TELEGRAM_CHAT_ID,
@@ -377,7 +384,7 @@ def send_telegram_photo(photo_url, caption, buttons=None):
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req) as resp:
+        with urllib.request.urlopen(req, timeout=30) as resp:
             result = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         error_body = e.read().decode("utf-8")
@@ -398,8 +405,6 @@ MAX_POSTS_PER_RUN = 3
 SECONDS_BETWEEN_POSTS = 3
 CATCH_UP_ONLY = os.environ.get("CATCH_UP_ONLY", "false").lower() == "true"
 
-
-# ========== НОВОЕ: Принудительная публикация по ссылке ==========
 FORCE_VIDEO_URL = os.environ.get("FORCE_VIDEO_URL", "")
 
 
@@ -408,15 +413,12 @@ def main():
     candidates = find_candidate_videos()
     candidates_to_check = [vid for vid in candidates if vid not in posted_ids]
 
-    # Если задана принудительная ссылка — добавляем её в начало
     force_video_id = extract_video_id(FORCE_VIDEO_URL)
     if force_video_id:
         print(f"🔗 Принудительная публикация: {force_video_id}")
-        # Удаляем из posted_ids, чтобы бот запостил заново
         if force_video_id in posted_ids:
             posted_ids.discard(force_video_id)
             print(f"🔄 Удалено из posted_ids для повторной публикации")
-        # Добавляем в начало списка на проверку
         if force_video_id not in candidates_to_check:
             candidates_to_check.insert(0, force_video_id)
 
