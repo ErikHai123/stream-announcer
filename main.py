@@ -25,10 +25,14 @@ YOUTUBE_API_KEY = os.environ["YOUTUBE_API_KEY"]
 YOUTUBE_CHANNEL_ID = os.environ["YOUTUBE_CHANNEL_ID"]
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
+ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID", "")
 TIMEZONE = os.environ.get("TIMEZONE", "Europe/Moscow")
 TIMEZONE_LABEL = os.environ.get("TIMEZONE_LABEL", "МСК")
 SECOND_TIMEZONE = os.environ.get("SECOND_TIMEZONE", "Asia/Almaty")
 SECOND_TIMEZONE_LABEL = os.environ.get("SECOND_TIMEZONE_LABEL", "Казахстан")
+
+REPO = "ErikHai123"
+REPO_NAME = "stream-announcer"
 
 TWITCH_URL = "https://www.twitch.tv/atomgit"
 TIKTOK_URL = "https://www.tiktok.com/@atomgit"
@@ -37,20 +41,62 @@ SUBSCRIBER_MILESTONE_STEP = int(os.environ.get("SUBSCRIBER_MILESTONE_STEP", "100
 
 STATE_FILE = os.path.join(os.path.dirname(__file__), "posted_ids.json")
 MILESTONE_STATE_FILE = os.path.join(os.path.dirname(__file__), "milestone_state.json")
+STATS_FILE = os.path.join(os.path.dirname(__file__), "daily_stats.json")
 
 # Защита от слишком частых запусков (не чаще раза в 60 секунд)
 _RUN_LOCK_FILE = os.path.join(os.path.dirname(__file__), ".last_run")
 _MIN_RUN_INTERVAL_SECONDS = 60
 
 
+# ---------- Статистика за день ----------
+def load_stats():
+    if os.path.exists(STATS_FILE):
+        with open(STATS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {"current_date": "", "posts_today": 0, "errors_today": 0, "report_sent_today": False}
+
+
+def save_stats(stats):
+    with open(STATS_FILE, "w", encoding="utf-8") as f:
+        json.dump(stats, f, ensure_ascii=False, indent=2)
+
+
+def increment_posts(stats):
+    stats["posts_today"] = stats.get("posts_today", 0) + 1
+
+
+def increment_errors(stats):
+    stats["errors_today"] = stats.get("errors_today", 0) + 1
+
+
+def send_daily_report(stats):
+    if not ADMIN_CHAT_ID:
+        return
+    date_str = datetime.now(zoneinfo.ZoneInfo("Europe/Moscow")).strftime("%d.%m.%Y")
+    posts = stats.get("posts_today", 0)
+    errors = stats.get("errors_today", 0)
+
+    text = f"📊 Отчёт за {date_str}\n✅ Постов сделано: {posts}\n❌ Ошибок за день: {errors}"
+    if errors > 10:
+        text += f"\n🔗 Логи: https://github.com/{REPO}/{REPO_NAME}/actions"
+    elif posts == 0 and errors == 0:
+        text += "\n💤 Сегодня тихо, но бот на месте!"
+
+    try:
+        send_telegram_message(ADMIN_CHAT_ID, text)
+        print(f"📤 Отчёт отправлен админу: {posts} постов, {errors} ошибок")
+    except Exception as e:
+        print(f"Не удалось отправить отчёт админу: {e}", file=sys.stderr)
+
+
+# ---------- Защита от частых запусков ----------
 def _check_rate_limit():
-    """Пропускаем запуск, если предыдущий был менее 60 секунд назад."""
     if os.path.exists(_RUN_LOCK_FILE):
         with open(_RUN_LOCK_FILE, "r", encoding="utf-8") as f:
             try:
                 last_run = float(f.read().strip())
                 if time.time() - last_run < _MIN_RUN_INTERVAL_SECONDS:
-                    print(f"⏳ Слишком частый запуск. Пропускаем (прошло {int(time.time() - last_run)} сек).")
+                    print(f"⏳ Слишком частый запуск. Пропускаем ({int(time.time() - last_run)} сек назад был запуск).")
                     return False
             except ValueError:
                 pass
@@ -59,6 +105,7 @@ def _check_rate_limit():
     return True
 
 
+# ---------- Состояния ----------
 def load_last_milestone():
     if os.path.exists(MILESTONE_STATE_FILE):
         with open(MILESTONE_STATE_FILE, "r", encoding="utf-8") as f:
@@ -83,6 +130,7 @@ def save_posted_ids(ids):
         json.dump(sorted(ids), f, ensure_ascii=False, indent=2)
 
 
+# ---------- HTTP с timeout ----------
 def http_get_json(url, params, timeout=15):
     query = urllib.parse.urlencode(params)
     full_url = f"{url}?{query}"
@@ -100,6 +148,7 @@ def http_get_json(url, params, timeout=15):
         raise
 
 
+# ---------- YouTube ----------
 def get_uploads_playlist_id():
     data = http_get_json(
         "https://www.googleapis.com/youtube/v3/channels",
@@ -193,7 +242,6 @@ def parse_duration_seconds(iso_duration):
 
 
 def extract_video_id(url):
-    """Вытаскиваем video ID из любой ссылки YouTube."""
     if not url or not url.strip():
         return None
     patterns = [
@@ -209,6 +257,7 @@ def extract_video_id(url):
     return None
 
 
+# ---------- Эмодзи ----------
 GAME_EMOJIS = [
     ("gta", "🚗"),
     ("гта", "🚗"),
@@ -226,6 +275,20 @@ GAME_EMOJIS = [
     ("fifa", "⚽"),
     ("repo", "🤖"),
     ("battlefield", "💣"),
+    ("valorant", "🔫"),
+    ("dota", "⚔️"),
+    ("fortnite", "🔫"),
+    ("warzone", "🔫"),
+    ("elden ring", "⚔️"),
+    ("stalker", "☢️"),
+    ("roblox", "🧱"),
+    ("apex", "🔫"),
+    ("overwatch", "🔫"),
+    ("wow", "⚔️"),
+    ("world of warcraft", "⚔️"),
+    ("rocket league", "⚽"),
+    ("fall guys", "🎮"),
+    ("among us", "🎮"),
 ]
 
 DEFAULT_THEME_EMOJI = "🔴"
@@ -239,6 +302,7 @@ def detect_theme_emoji(title):
     return DEFAULT_THEME_EMOJI
 
 
+# ---------- Шаблоны ----------
 LIVE_TEMPLATES = [
     "{emoji} Внимание! {channel} начал стрим прямо сейчас!\n«{title}»\nЗаходи, пока горячо 👇",
     "{emoji} Мы уже в эфире! {channel} стримит:\n«{title}»\nПодключайся, будет интересно!",
@@ -304,6 +368,7 @@ def generate_announcement_text(content_type, title, channel_title, start_time_st
     return template.format(channel=channel_title, title=title, when=start_time_str, emoji=emoji)
 
 
+# ---------- Telegram ----------
 def send_telegram_message(chat_id, text):
     body = urllib.parse.urlencode(
         {
@@ -321,47 +386,6 @@ def send_telegram_message(chat_id, text):
     if not result.get("ok"):
         raise RuntimeError(f"Telegram error: {result}")
     return result
-
-
-MILESTONE_TEMPLATES = [
-    "🎉 Ура! У {channel} уже {count} подписчиков!\nСпасибо, что вы с нами — это только начало 🚀",
-    "🎊 Юбилей! {channel} набрал(а) {count} подписчиков!\nОгромное спасибо каждому из вас ❤️",
-    "🥳 {count} подписчиков у {channel}!\nСпасибо за поддержку, дальше — больше!",
-]
-
-
-def check_subscriber_milestone():
-    try:
-        count, channel_title = get_channel_info()
-    except Exception as e:
-        print(f"Не удалось получить число подписчиков: {e}", file=sys.stderr)
-        return
-
-    if count is None:
-        return
-
-    current_milestone = (count // SUBSCRIBER_MILESTONE_STEP) * SUBSCRIBER_MILESTONE_STEP
-    last_milestone, state_existed = load_last_milestone()
-
-    if not state_existed:
-        save_last_milestone(current_milestone)
-        print(f"Отметка подписчиков инициализирована: {current_milestone}")
-        return
-
-    if current_milestone > last_milestone and current_milestone > 0:
-        text = random.choice(MILESTONE_TEMPLATES).format(channel=channel_title, count=current_milestone)
-        try:
-            result = send_telegram_message(TELEGRAM_CHAT_ID, text)
-            print(f"Опубликовано поздравление с {current_milestone} подписчиками")
-            try:
-                message_id = result["result"]["message_id"]
-                react_to_message(TELEGRAM_CHAT_ID, message_id, "🎉")
-            except Exception as e:
-                print(f"Не удалось поставить реакцию: {e}", file=sys.stderr)
-        except Exception as e:
-            print(f"Ошибка отправки поздравления: {e}", file=sys.stderr)
-            return
-        save_last_milestone(current_milestone)
 
 
 def react_to_message(chat_id, message_id, emoji="🔥"):
@@ -416,6 +440,49 @@ def send_telegram_photo(photo_url, caption, buttons=None):
     return result
 
 
+# ---------- Milestone ----------
+MILESTONE_TEMPLATES = [
+    "🎉 Ура! У {channel} уже {count} подписчиков!\nСпасибо, что вы с нами — это только начало 🚀",
+    "🎊 Юбилей! {channel} набрал(а) {count} подписчиков!\nОгромное спасибо каждому из вас ❤️",
+    "🥳 {count} подписчиков у {channel}!\nСпасибо за поддержку, дальше — больше!",
+]
+
+
+def check_subscriber_milestone():
+    try:
+        count, channel_title = get_channel_info()
+    except Exception as e:
+        print(f"Не удалось получить число подписчиков: {e}", file=sys.stderr)
+        return
+
+    if count is None:
+        return
+
+    current_milestone = (count // SUBSCRIBER_MILESTONE_STEP) * SUBSCRIBER_MILESTONE_STEP
+    last_milestone, state_existed = load_last_milestone()
+
+    if not state_existed:
+        save_last_milestone(current_milestone)
+        print(f"Отметка подписчиков инициализирована: {current_milestone}")
+        return
+
+    if current_milestone > last_milestone and current_milestone > 0:
+        text = random.choice(MILESTONE_TEMPLATES).format(channel=channel_title, count=current_milestone)
+        try:
+            result = send_telegram_message(TELEGRAM_CHAT_ID, text)
+            print(f"Опубликовано поздравление с {current_milestone} подписчиками")
+            try:
+                message_id = result["result"]["message_id"]
+                react_to_message(TELEGRAM_CHAT_ID, message_id, "🎉")
+            except Exception as e:
+                print(f"Не удалось поставить реакцию: {e}", file=sys.stderr)
+        except Exception as e:
+            print(f"Ошибка отправки поздравления: {e}", file=sys.stderr)
+            return
+        save_last_milestone(current_milestone)
+
+
+# ---------- Main ----------
 SHORTS_MAX_DURATION_SECONDS = 60
 MAX_POSTS_PER_RUN = 3
 SECONDS_BETWEEN_POSTS = 3
@@ -425,12 +492,42 @@ FORCE_VIDEO_URL = os.environ.get("FORCE_VIDEO_URL", "")
 
 
 def main():
-    # Защита от слишком частых запусков (например, если Google Apps Script сбойнет)
+    # --- Загружаем статистику и проверяем дату ---
+    stats = load_stats()
+    now = datetime.now(zoneinfo.ZoneInfo("Europe/Moscow"))
+    today_str = now.strftime("%Y-%m-%d")
+
+    # Если наступил новый день — сбрасываем счётчики
+    if stats.get("current_date") != today_str:
+        stats = {
+            "current_date": today_str,
+            "posts_today": 0,
+            "errors_today": 0,
+            "report_sent_today": False,
+        }
+
+    # Отчёт в 23:00 МСК (ловим в диапазоне 23:00–23:09)
+    if now.hour == 23 and not stats.get("report_sent_today", False):
+        send_daily_report(stats)
+        stats["report_sent_today"] = True
+        save_stats(stats)
+
+    # --- Защита от частых запусков ---
     if not _check_rate_limit():
+        save_stats(stats)
         return
 
+    # --- Основная логика ---
     posted_ids = load_posted_ids()
-    candidates = find_candidate_videos()
+    candidates = []
+    try:
+        candidates = find_candidate_videos()
+    except Exception as e:
+        print(f"❌ Ошибка получения видео с YouTube: {e}", file=sys.stderr)
+        increment_errors(stats)
+        save_stats(stats)
+        return
+
     candidates_to_check = [vid for vid in candidates if vid not in posted_ids]
 
     force_video_id = extract_video_id(FORCE_VIDEO_URL)
@@ -452,9 +549,17 @@ def main():
             f"Режим CATCH_UP_ONLY: помечено как уже показанные - "
             f"{len(candidates_to_check)} видео. Ничего не опубликовано."
         )
+        save_stats(stats)
         return
 
-    details_by_id = get_video_details_batch(candidates_to_check)
+    details_by_id = {}
+    try:
+        details_by_id = get_video_details_batch(candidates_to_check)
+    except Exception as e:
+        print(f"❌ Ошибка получения деталей видео: {e}", file=sys.stderr)
+        increment_errors(stats)
+        save_stats(stats)
+        return
 
     new_posts = 0
     for video_id in candidates_to_check:
@@ -465,6 +570,7 @@ def main():
         details = details_by_id.get(video_id)
         if not details:
             print(f"⚠️ Нет деталей для видео {video_id}", file=sys.stderr)
+            increment_errors(stats)
             continue
 
         snippet = details["snippet"]
@@ -495,12 +601,13 @@ def main():
             text = generate_announcement_text(content_type, title, channel_title, start_time_str)
         except Exception as e:
             print(f"Ошибка генерации текста для {video_id}: {e}", file=sys.stderr)
+            increment_errors(stats)
             continue
 
         video_link = f"https://www.youtube.com/watch?v={video_id}"
         caption = text
 
-        # ========== УМНЫЕ КНОПКИ: Twitch/TikTok только для стримов ==========
+        # Умные кнопки: Twitch/TikTok только для стримов
         if content_type in ("live", "upcoming"):
             buttons = [
                 {"text": "▶️ YouTube", "url": video_link},
@@ -519,6 +626,7 @@ def main():
         try:
             result = send_telegram_photo(thumbnail_url, caption, buttons)
             print(f"✅ Опубликовано: {title} ({video_id})")
+            increment_posts(stats)
             try:
                 message_id = result["result"]["message_id"]
                 react_to_message(TELEGRAM_CHAT_ID, message_id, "🔥")
@@ -526,6 +634,7 @@ def main():
                 print(f"Не удалось поставить реакцию: {e}", file=sys.stderr)
         except Exception as e:
             print(f"❌ Ошибка отправки в Telegram для {video_id}: {e}", file=sys.stderr)
+            increment_errors(stats)
             continue
 
         posted_ids.add(video_id)
@@ -536,6 +645,7 @@ def main():
     print(f"Готово. Новых постов: {new_posts}")
 
     check_subscriber_milestone()
+    save_stats(stats)
 
 
 if __name__ == "__main__":
