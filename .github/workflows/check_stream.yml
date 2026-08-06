@@ -1,6 +1,6 @@
 name: Check YouTube Stream
 
-# Не запускать параллельно — ждать очереди, чтобы не было конфликтов git push
+# Не запускать параллельно — строго по очереди
 concurrency:
   group: bot-run
   cancel-in-progress: false
@@ -25,7 +25,7 @@ permissions:
 jobs:
   check-and-post:
     runs-on: ubuntu-latest
-    timeout-minutes: 10  # Если зависнет — убьёт через 10 минут, а не через 6 часов
+    timeout-minutes: 10  # Если зависнет — убьёт через 10 минут
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -41,6 +41,7 @@ jobs:
           YOUTUBE_CHANNEL_ID: ${{ secrets.YOUTUBE_CHANNEL_ID }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          ADMIN_CHAT_ID: ${{ secrets.ADMIN_CHAT_ID }}
           TIMEZONE: "Europe/Moscow"
           CATCH_UP_ONLY: ${{ github.event.inputs.catch_up }}
           FORCE_VIDEO_URL: ${{ github.event.inputs.force_video_url }}
@@ -50,7 +51,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add posted_ids.json milestone_state.json
+          git add posted_ids.json milestone_state.json daily_stats.json
           git diff --quiet --cached || git commit -m "Update state files"
-          git pull --rebase  # Подтягиваем изменения от параллельных запусков
+          git pull --rebase
           git push
