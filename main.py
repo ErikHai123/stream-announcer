@@ -47,6 +47,9 @@ STATS_FILE = os.path.join(os.path.dirname(__file__), "daily_stats.json")
 _RUN_LOCK_FILE = os.path.join(os.path.dirname(__file__), ".last_run")
 _MIN_RUN_INTERVAL_SECONDS = 60
 
+# Сколько дней хранить posted_ids (потом автоудаление)
+_POSTED_IDS_MAX_AGE_DAYS = 30
+
 
 # ---------- Статистика за день ----------
 def load_stats():
@@ -105,6 +108,45 @@ def _check_rate_limit():
     return True
 
 
+# ---------- posted_ids с автоочисткой старых записей ----------
+def load_posted_ids():
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        # Миграция со старого формата (список) на новый (словарь с датами)
+        if isinstance(data, list):
+            today = datetime.now(zoneinfo.ZoneInfo(TIMEZONE)).strftime("%Y-%m-%d")
+            return {vid: today for vid in data}
+        elif isinstance(data, dict):
+            return data
+    return {}
+
+
+def save_posted_ids(ids_dict):
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump(ids_dict, f, ensure_ascii=False, indent=2)
+
+
+def clean_old_posted_ids(posted_ids, days=_POSTED_IDS_MAX_AGE_DAYS):
+    """Удаляем ID старше N дней — файл не разрастётся бесконечно."""
+    if not posted_ids:
+        return posted_ids
+    today = datetime.now(zoneinfo.ZoneInfo(TIMEZONE)).date()
+    to_remove = []
+    for vid, date_str in list(posted_ids.items()):
+        try:
+            post_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+            if (today - post_date).days > days:
+                to_remove.append(vid)
+        except (ValueError, TypeError):
+            to_remove.append(vid)
+    for vid in to_remove:
+        del posted_ids[vid]
+    if to_remove:
+        print(f"🧹 Очищено старых ID: {len(to_remove)} (старше {days} дней)")
+    return posted_ids
+
+
 # ---------- Состояния ----------
 def load_last_milestone():
     if os.path.exists(MILESTONE_STATE_FILE):
@@ -116,18 +158,6 @@ def load_last_milestone():
 def save_last_milestone(value):
     with open(MILESTONE_STATE_FILE, "w", encoding="utf-8") as f:
         json.dump({"last_milestone": value}, f, ensure_ascii=False, indent=2)
-
-
-def load_posted_ids():
-    if os.path.exists(STATE_FILE):
-        with open(STATE_FILE, "r", encoding="utf-8") as f:
-            return set(json.load(f))
-    return set()
-
-
-def save_posted_ids(ids):
-    with open(STATE_FILE, "w", encoding="utf-8") as f:
-        json.dump(sorted(ids), f, ensure_ascii=False, indent=2)
 
 
 # ---------- HTTP с timeout ----------
@@ -506,7 +536,7 @@ def main():
             "report_sent_today": False,
         }
 
-    # Отчёт в 23:00 МСК (ловим в диапазоне 23:00–23:09)
+    # Отчёт в 23:00 МСК (ловим в диапазоне 23:00–23:59)
     if now.hour == 23 and not stats.get("report_sent_today", False):
         send_daily_report(stats)
         stats["report_sent_today"] = True
@@ -517,14 +547,17 @@ def main():
         save_stats(stats)
         return
 
-    # --- Основная логика ---
+    # --- Загружаем и чистим posted_ids ---
     posted_ids = load_posted_ids()
+    posted_ids = clean_old_posted_ids(posted_ids, days=_POSTED_IDS_MAX_AGE_DAYS)
+    
     candidates = []
     try:
         candidates = find_candidate_videos()
     except Exception as e:
         print(f"❌ Ошибка получения видео с YouTube: {e}", file=sys.stderr)
         increment_errors(stats)
+        save_posted_ids(posted_ids)
         save_stats(stats)
         return
 
@@ -534,7 +567,7 @@ def main():
     if force_video_id:
         print(f"🔗 Принудительная публикация: {force_video_id}")
         if force_video_id in posted_ids:
-            posted_ids.discard(force_video_id)
+            posted_ids.pop(force_video_id, None)
             print(f"🔄 Удалено из posted_ids для повторной публикации")
         if force_video_id not in candidates_to_check:
             candidates_to_check.insert(0, force_video_id)
@@ -543,7 +576,9 @@ def main():
     print(f"🆕 Новых (не в posted_ids): {len(candidates_to_check)}")
 
     if CATCH_UP_ONLY:
-        posted_ids.update(candidates_to_check)
+        today_str = datetime.now(zoneinfo.ZoneInfo(TIMEZONE)).strftime("%Y-%m-%d")
+        for vid in candidates_to_check:
+            posted_ids[vid] = today_str
         save_posted_ids(posted_ids)
         print(
             f"Режим CATCH_UP_ONLY: помечено как уже показанные - "
@@ -558,10 +593,13 @@ def main():
     except Exception as e:
         print(f"❌ Ошибка получения деталей видео: {e}", file=sys.stderr)
         increment_errors(stats)
+        save_posted_ids(posted_ids)
         save_stats(stats)
         return
 
     new_posts = 0
+    today_str = datetime.now(zoneinfo.ZoneInfo(TIMEZONE)).strftime("%Y-%m-%d")
+    
     for video_id in candidates_to_check:
         if new_posts >= MAX_POSTS_PER_RUN:
             print(f"Достигнут лимит {MAX_POSTS_PER_RUN} постов за запуск, остальное - в следующий раз")
@@ -637,7 +675,7 @@ def main():
             increment_errors(stats)
             continue
 
-        posted_ids.add(video_id)
+        posted_ids[video_id] = today_str
         new_posts += 1
         time.sleep(SECONDS_BETWEEN_POSTS)
 
