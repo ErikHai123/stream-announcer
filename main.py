@@ -38,6 +38,26 @@ SUBSCRIBER_MILESTONE_STEP = int(os.environ.get("SUBSCRIBER_MILESTONE_STEP", "100
 STATE_FILE = os.path.join(os.path.dirname(__file__), "posted_ids.json")
 MILESTONE_STATE_FILE = os.path.join(os.path.dirname(__file__), "milestone_state.json")
 
+# Защита от слишком частых запусков (не чаще раза в 60 секунд)
+_RUN_LOCK_FILE = os.path.join(os.path.dirname(__file__), ".last_run")
+_MIN_RUN_INTERVAL_SECONDS = 60
+
+
+def _check_rate_limit():
+    """Пропускаем запуск, если предыдущий был менее 60 секунд назад."""
+    if os.path.exists(_RUN_LOCK_FILE):
+        with open(_RUN_LOCK_FILE, "r", encoding="utf-8") as f:
+            try:
+                last_run = float(f.read().strip())
+                if time.time() - last_run < _MIN_RUN_INTERVAL_SECONDS:
+                    print(f"⏳ Слишком частый запуск. Пропускаем (прошло {int(time.time() - last_run)} сек).")
+                    return False
+            except ValueError:
+                pass
+    with open(_RUN_LOCK_FILE, "w", encoding="utf-8") as f:
+        f.write(str(time.time()))
+    return True
+
 
 def load_last_milestone():
     if os.path.exists(MILESTONE_STATE_FILE):
@@ -63,7 +83,6 @@ def save_posted_ids(ids):
         json.dump(sorted(ids), f, ensure_ascii=False, indent=2)
 
 
-# ========== ОБНОВЛЕНО: Добавлен timeout и обработка URLError ==========
 def http_get_json(url, params, timeout=15):
     query = urllib.parse.urlencode(params)
     full_url = f"{url}?{query}"
@@ -285,7 +304,6 @@ def generate_announcement_text(content_type, title, channel_title, start_time_st
     return template.format(channel=channel_title, title=title, when=start_time_str, emoji=emoji)
 
 
-# ========== ОБНОВЛЕНО: Добавлен timeout ==========
 def send_telegram_message(chat_id, text):
     body = urllib.parse.urlencode(
         {
@@ -346,7 +364,6 @@ def check_subscriber_milestone():
         save_last_milestone(current_milestone)
 
 
-# ========== ОБНОВЛЕНО: Добавлен timeout ==========
 def react_to_message(chat_id, message_id, emoji="🔥"):
     body = urllib.parse.urlencode(
         {
@@ -367,7 +384,6 @@ def react_to_message(chat_id, message_id, emoji="🔥"):
     return result
 
 
-# ========== ОБНОВЛЕНО: Добавлен timeout ==========
 def send_telegram_photo(photo_url, caption, buttons=None):
     params = {
         "chat_id": TELEGRAM_CHAT_ID,
@@ -409,6 +425,10 @@ FORCE_VIDEO_URL = os.environ.get("FORCE_VIDEO_URL", "")
 
 
 def main():
+    # Защита от слишком частых запусков (например, если Google Apps Script сбойнет)
+    if not _check_rate_limit():
+        return
+
     posted_ids = load_posted_ids()
     candidates = find_candidate_videos()
     candidates_to_check = [vid for vid in candidates if vid not in posted_ids]
@@ -479,11 +499,18 @@ def main():
 
         video_link = f"https://www.youtube.com/watch?v={video_id}"
         caption = text
-        buttons = [
-            {"text": "▶️ YouTube", "url": video_link},
-            {"text": "🟣 Twitch", "url": TWITCH_URL},
-            {"text": "⚫️ TikTok", "url": TIKTOK_URL},
-        ]
+
+        # ========== УМНЫЕ КНОПКИ: Twitch/TikTok только для стримов ==========
+        if content_type in ("live", "upcoming"):
+            buttons = [
+                {"text": "▶️ YouTube", "url": video_link},
+                {"text": "🟣 Twitch", "url": TWITCH_URL},
+                {"text": "⚫️ TikTok", "url": TIKTOK_URL},
+            ]
+        else:
+            buttons = [
+                {"text": "▶️ YouTube", "url": video_link},
+            ]
 
         print(f"📤 Попытка отправки: {title} ({video_id}) | Тип: {content_type}")
         print(f"   🖼️ Thumbnail: {thumbnail_url}")
