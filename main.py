@@ -42,6 +42,7 @@ SUBSCRIBER_MILESTONE_STEP = int(os.environ.get("SUBSCRIBER_MILESTONE_STEP", "100
 STATE_FILE = os.path.join(os.path.dirname(__file__), "posted_ids.json")
 MILESTONE_STATE_FILE = os.path.join(os.path.dirname(__file__), "milestone_state.json")
 STATS_FILE = os.path.join(os.path.dirname(__file__), "daily_stats.json")
+RANDOM_POSTED_STATE_FILE = os.path.join(os.path.dirname(__file__), "random_posted_ids.json")
 
 # Защита от слишком частых запусков (не чаще раза в 60 секунд)
 _RUN_LOCK_FILE = os.path.join(os.path.dirname(__file__), ".last_run")
@@ -49,6 +50,10 @@ _MIN_RUN_INTERVAL_SECONDS = 60
 
 # Сколько дней хранить posted_ids (потом автоудаление)
 _POSTED_IDS_MAX_AGE_DAYS = 30
+_RANDOM_POSTED_MAX_AGE_DAYS = 90
+
+# Сколько страниц плейлиста загружать для рандома (5 × 50 = 250 видео)
+_MAX_PAGES_FOR_RANDOM = 5
 
 
 # ---------- Статистика за день ----------
@@ -56,7 +61,7 @@ def load_stats():
     if os.path.exists(STATS_FILE):
         with open(STATS_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    return {"current_date": "", "posts_today": 0, "errors_today": 0, "report_sent_today": False}
+    return {"current_date": "", "posts_today": 0, "errors_today": 0, "report_sent_today": False, "random_sent_today": False}
 
 
 def save_stats(stats):
@@ -145,6 +150,90 @@ def clean_old_posted_ids(posted_ids, days=_POSTED_IDS_MAX_AGE_DAYS):
     if to_remove:
         print(f"🧹 Очищено старых ID: {len(to_remove)} (старше {days} дней)")
     return posted_ids
+
+
+# ---------- Рандомные видео (отдельный трекинг) ----------
+def load_random_posted_ids():
+    if os.path.exists(RANDOM_POSTED_STATE_FILE):
+        with open(RANDOM_POSTED_STATE_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+
+def save_random_posted_ids(ids_dict):
+    with open(RANDOM_POSTED_STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump(ids_dict, f, ensure_ascii=False, indent=2)
+
+
+def clean_old_random_posted_ids(random_posted_ids, days=_RANDOM_POSTED_MAX_AGE_DAYS):
+    if not random_posted_ids:
+        return random_posted_ids
+    today = datetime.now(zoneinfo.ZoneInfo(TIMEZONE)).date()
+    to_remove = []
+    for vid, date_str in list(random_posted_ids.items()):
+        try:
+            post_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+            if (today - post_date).days > days:
+                to_remove.append(vid)
+        except (ValueError, TypeError):
+            to_remove.append(vid)
+    for vid in to_remove:
+        del random_posted_ids[vid]
+    if to_remove:
+        print(f"🧹 Очищено старых random ID: {len(to_remove)} (старше {days} дней)")
+    return random_posted_ids
+
+
+def get_all_uploads(max_pages=_MAX_PAGES_FOR_RANDOM):
+    """Получает видео из uploads плейлиста с пагинацией (ограничено max_pages)."""
+    playlist_id = get_uploads_playlist_id()
+    if not playlist_id:
+        return []
+    
+    video_ids = []
+    next_page_token = None
+    pages = 0
+    
+    while pages < max_pages:
+        params = {
+            "part": "snippet",
+            "playlistId": playlist_id,
+            "maxResults": 50,
+            "key": YOUTUBE_API_KEY,
+        }
+        if next_page_token:
+            params["pageToken"] = next_page_token
+            
+        try:
+            data = http_get_json(
+                "https://www.googleapis.com/youtube/v3/playlistItems",
+                params,
+            )
+        except Exception as e:
+            print(f"⚠️ Ошибка загрузки страницы uploads: {e}", file=sys.stderr)
+            break
+        
+        for item in data.get("items", []):
+            vid = item["snippet"]["resourceId"]["videoId"]
+            video_ids.append(vid)
+            
+        next_page_token = data.get("nextPageToken")
+        pages += 1
+        if not next_page_token:
+            break
+            
+    return video_ids
+
+
+def get_random_unposted_video(posted_ids, random_posted_ids):
+    """Возвращает случайное видео, которое не публиковалось ни как новое, ни как рандомное."""
+    all_videos = get_all_uploads()
+    
+    available = [vid for vid in all_videos if vid not in posted_ids and vid not in random_posted_ids]
+    
+    if not available:
+        return None
+    return random.choice(available)
 
 
 # ---------- Состояния ----------
@@ -385,6 +474,19 @@ SHORTS_TEMPLATES = [
     "{emoji} Только вышел шортс: «{title}»\nОт {channel} — не пролистывай мимо!",
 ]
 
+RANDOM_TEMPLATES = [
+    "{emoji} Вспоминаем классику! {channel} — «{title}»\nЕсли пропустил — самое время наверстать 👇",
+    "{emoji} Рандомный выбор дня: «{title}» от {channel}\nЗалетай, это того стоит!",
+    "{emoji} Случайно наткнулись на «{title}» от {channel}\nНе пропусти, если ещё не видел!",
+    "{emoji} Давайте вспомним: «{title}»\nОт {channel} — отличный ролик для пересмотра",
+    "{emoji} Рекомендуем глянуть: «{title}»\n{channel} уже ждёт тебя на просмотре",
+    "{emoji} Случайный ролик дня: «{title}»\nОт {channel} — заходи, будет интересно!",
+    "{emoji} Нашли жемчужину: «{title}» от {channel}\nЕсли пропустил — исправляй!",
+    "{emoji} «{title}» — классика от {channel}\nПересмотри, если уже видел, или смотри впервые!",
+    "{emoji} Рандомный ролик: «{title}»\n{channel} — заходи, не пожалеешь",
+    "{emoji} Внезапно: «{title}» от {channel}!\nОтличный повод вернуться к старым видео",
+]
+
 
 def generate_announcement_text(content_type, title, channel_title, start_time_str=""):
     templates_map = {
@@ -392,6 +494,7 @@ def generate_announcement_text(content_type, title, channel_title, start_time_st
         "upcoming": UPCOMING_TEMPLATES,
         "video": VIDEO_TEMPLATES,
         "shorts": SHORTS_TEMPLATES,
+        "random": RANDOM_TEMPLATES,
     }
     template = random.choice(templates_map[content_type])
     emoji = detect_theme_emoji(title)
@@ -534,6 +637,7 @@ def main():
             "posts_today": 0,
             "errors_today": 0,
             "report_sent_today": False,
+            "random_sent_today": False,
         }
 
     # Отчёт в 23:00 МСК (ловим в диапазоне 23:00–23:59)
@@ -550,7 +654,56 @@ def main():
     # --- Загружаем и чистим posted_ids ---
     posted_ids = load_posted_ids()
     posted_ids = clean_old_posted_ids(posted_ids, days=_POSTED_IDS_MAX_AGE_DAYS)
-    
+
+    # --- Рандомное видео дня в 15:00 МСК ---
+    if now.hour == 15 and not stats.get("random_sent_today", False):
+        random_posted_ids = load_random_posted_ids()
+        random_posted_ids = clean_old_random_posted_ids(random_posted_ids, days=_RANDOM_POSTED_MAX_AGE_DAYS)
+        
+        random_video_id = get_random_unposted_video(posted_ids, random_posted_ids)
+        if random_video_id:
+            print(f"🎲 Выбрано рандомное видео: {random_video_id}")
+            try:
+                details = get_video_details_batch([random_video_id]).get(random_video_id)
+                if details:
+                    snippet = details["snippet"]
+                    content_details = details.get("contentDetails", {})
+                    title = snippet["title"]
+                    channel_title = snippet["channelTitle"]
+                    thumbnail_url = best_thumbnail(snippet["thumbnails"])
+                    
+                    duration_seconds = parse_duration_seconds(content_details.get("duration", ""))
+                    content_type = "shorts" if duration_seconds <= SHORTS_MAX_DURATION_SECONDS else "video"
+                    
+                    text = generate_announcement_text("random", title, channel_title)
+                    video_link = f"https://www.youtube.com/watch?v={random_video_id}"
+                    buttons = [{"text": "▶️ YouTube", "url": video_link}]
+                    
+                    print(f"📤 Попытка отправки рандомного: {title} ({random_video_id})")
+                    result = send_telegram_photo(thumbnail_url, text, buttons)
+                    print(f"✅ Рандомное видео опубликовано: {title} ({random_video_id})")
+                    increment_posts(stats)
+                    try:
+                        message_id = result["result"]["message_id"]
+                        react_to_message(TELEGRAM_CHAT_ID, message_id, "🎲")
+                    except Exception as e:
+                        print(f"Не удалось поставить реакцию: {e}", file=sys.stderr)
+                    
+                    random_posted_ids[random_video_id] = today_str
+                    save_random_posted_ids(random_posted_ids)
+                    stats["random_sent_today"] = True
+                else:
+                    print(f"⚠️ Нет деталей для рандомного видео {random_video_id}", file=sys.stderr)
+                    increment_errors(stats)
+            except Exception as e:
+                print(f"❌ Ошибка отправки рандомного видео: {e}", file=sys.stderr)
+                increment_errors(stats)
+        else:
+            print("ℹ️ Нет доступных видео для рандомной публикации (все уже были опубликованы)")
+        
+        save_stats(stats)
+
+    # --- Основная логика: новые видео/стримы ---
     candidates = []
     try:
         candidates = find_candidate_videos()
