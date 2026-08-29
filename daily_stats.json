@@ -1,7 +1,7 @@
 {
-  "current_date": "2026-08-28",
-  "posts_today": 3,
+  "current_date": "2026-08-29",
+  "posts_today": 0,
   "errors_today": 0,
-  "report_sent_today": true,
-  "random_sent_today": true
+  "report_sent_today": false,
+  "random_sent_today": false
 }
