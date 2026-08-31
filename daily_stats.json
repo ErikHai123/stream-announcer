@@ -2,6 +2,6 @@
   "current_date": "2026-08-31",
   "posts_today": 1,
   "errors_today": 1,
-  "report_sent_today": false,
+  "report_sent_today": true,
   "random_sent_today": true
 }
