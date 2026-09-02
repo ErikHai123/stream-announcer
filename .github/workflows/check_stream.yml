@@ -6,7 +6,7 @@ concurrency:
 
 on:
   schedule:
-    - cron: "0 * * * *"
+    - cron: "*/5 * * * *"
   workflow_dispatch:
     inputs:
       catch_up:
