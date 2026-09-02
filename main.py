@@ -1,274 +1,204 @@
 """
-Stream Announcer Bot
----------------------
-Проверяет YouTube-канал на наличие запланированных/идущих стримов,
-генерирует текст анонса по шаблонам (без внешних AI-сервисов) и постит
-его в Telegram вместе с превью (thumbnail) стрима.
-
-Все настройки берутся из переменных окружения (см. README.md).
+Stream Announcer Bot + Live Polls
+----------------------------------
 """
 
-import os
-import json
-import random
-import sys
-import urllib.request
-import urllib.parse
-import urllib.error
-import re
-import time
+import os, json, random, sys, urllib.request, urllib.parse, urllib.error, re, time
 from datetime import datetime, timezone
 import zoneinfo
 
-# ---------- Конфиг из переменных окружения ----------
-YOUTUBE_API_KEY = os.environ["YOUTUBE_API_KEY"]
-YOUTUBE_CHANNEL_ID = os.environ["YOUTUBE_CHANNEL_ID"]
-TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
-ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID", "")
-TIMEZONE = os.environ.get("TIMEZONE", "Europe/Moscow")
-TIMEZONE_LABEL = os.environ.get("TIMEZONE_LABEL", "МСК")
-SECOND_TIMEZONE = os.environ.get("SECOND_TIMEZONE", "Asia/Almaty")
+# ---------- Config ----------
+YOUTUBE_API_KEY       = os.environ["YOUTUBE_API_KEY"]
+YOUTUBE_CHANNEL_ID    = os.environ["YOUTUBE_CHANNEL_ID"]
+TELEGRAM_BOT_TOKEN    = os.environ["TELEGRAM_BOT_TOKEN"]
+TELEGRAM_CHAT_ID      = os.environ["TELEGRAM_CHAT_ID"]
+ADMIN_CHAT_ID         = os.environ.get("ADMIN_CHAT_ID", "")
+TIMEZONE              = os.environ.get("TIMEZONE", "Europe/Moscow")
+TIMEZONE_LABEL        = os.environ.get("TIMEZONE_LABEL", "МСК")
+SECOND_TIMEZONE       = os.environ.get("SECOND_TIMEZONE", "Asia/Almaty")
 SECOND_TIMEZONE_LABEL = os.environ.get("SECOND_TIMEZONE_LABEL", "Казахстан")
 
-REPO = "ErikHai123"
+REPO      = "ErikHai123"
 REPO_NAME = "stream-announcer"
-
 TWITCH_URL = "https://www.twitch.tv/atomgit"
 TIKTOK_URL = "https://www.tiktok.com/@atomgit"
 
 SUBSCRIBER_MILESTONE_STEP = int(os.environ.get("SUBSCRIBER_MILESTONE_STEP", "10000"))
 
-STATE_FILE = os.path.join(os.path.dirname(__file__), "posted_ids.json")
-MILESTONE_STATE_FILE = os.path.join(os.path.dirname(__file__), "milestone_state.json")
-STATS_FILE = os.path.join(os.path.dirname(__file__), "daily_stats.json")
-RANDOM_POSTED_STATE_FILE = os.path.join(os.path.dirname(__file__), "random_posted_ids.json")
+STATE_FILE       = os.path.join(os.path.dirname(__file__), "posted_ids.json")
+MILESTONE_FILE   = os.path.join(os.path.dirname(__file__), "milestone_state.json")
+STATS_FILE       = os.path.join(os.path.dirname(__file__), "daily_stats.json")
+RANDOM_FILE      = os.path.join(os.path.dirname(__file__), "random_posted_ids.json")
+LIVE_POLL_FILE   = os.path.join(os.path.dirname(__file__), "live_poll_state.json")
 
-# Защита от слишком частых запусков (не чаще раза в 60 секунд)
 _RUN_LOCK_FILE = os.path.join(os.path.dirname(__file__), ".last_run")
 _MIN_RUN_INTERVAL_SECONDS = 60
+_POLL_DELAY_SECONDS       = 300
 
-# Сколько дней хранить posted_ids (потом автоудаление)
-_POSTED_IDS_MAX_AGE_DAYS = 30
+_POSTED_IDS_MAX_AGE_DAYS  = 30
 _RANDOM_POSTED_MAX_AGE_DAYS = 90
+_MAX_PAGES_FOR_RANDOM     = 5
 
-# Сколько страниц плейлиста загружать для рандома (5 x 50 = 250 видео)
-_MAX_PAGES_FOR_RANDOM = 5
-
-
-# ---------- Статистика за день ----------
+# ---------- Stats ----------
 def load_stats():
     if os.path.exists(STATS_FILE):
         try:
             with open(STATS_FILE, "r", encoding="utf-8") as f:
                 return json.load(f)
         except (json.JSONDecodeError, OSError) as e:
-            print(f"⚠️ Ошибка чтения stats, создаём заново: {e}", file=sys.stderr)
-    return {
-        "current_date": "",
-        "posts_today": 0,
-        "errors_today": 0,
-        "report_sent_today": False,
-        "random_sent_today": False,
-    }
-
+            print(f"⚠️ Ошибка чтения stats: {e}", file=sys.stderr)
+    return {"current_date":"","posts_today":0,"errors_today":0,
+            "report_sent_today":False,"random_sent_today":False}
 
 def save_stats(stats):
     with open(STATS_FILE, "w", encoding="utf-8") as f:
         json.dump(stats, f, ensure_ascii=False, indent=2)
 
-
-def increment_posts(stats):
-    stats["posts_today"] = stats.get("posts_today", 0) + 1
-
-
-def increment_errors(stats):
-    stats["errors_today"] = stats.get("errors_today", 0) + 1
-
+def increment_posts(stats):  stats["posts_today"] = stats.get("posts_today",0)+1
+def increment_errors(stats):   stats["errors_today"] = stats.get("errors_today",0)+1
 
 def send_daily_report(stats):
-    """Отправляет отчёт админу. НЕ ловит исключения — пусть всплывает в main()."""
-    if not ADMIN_CHAT_ID:
-        return
+    if not ADMIN_CHAT_ID: return
     date_str = datetime.now(zoneinfo.ZoneInfo("Europe/Moscow")).strftime("%d.%m.%Y")
-    posts = stats.get("posts_today", 0)
-    errors = stats.get("errors_today", 0)
-
-    text = f"📊 Отчёт за {date_str}\n✅ Постов сделано: {posts}\n❌ Ошибок за день: {errors}"
+    posts, errors = stats.get("posts_today",0), stats.get("errors_today",0)
+    text = f"📊 Отчёт за {date_str}\n✅ Постов: {posts}\n❌ Ошибок: {errors}"
     if errors > 10:
         text += f"\n🔗 Логи: https://github.com/{REPO}/{REPO_NAME}/actions"
     elif posts == 0 and errors == 0:
         text += "\n💤 Сегодня тихо, но бот на месте!"
-
     send_telegram_message(ADMIN_CHAT_ID, text)
-    print(f"📤 Отчёт отправлен админу: {posts} постов, {errors} ошибок")
+    print(f"📤 Отчёт отправлен: {posts} постов, {errors} ошибок")
 
-
-# ---------- Защита от частых запусков ----------
+# ---------- Rate limit ----------
 def _check_rate_limit():
     if os.path.exists(_RUN_LOCK_FILE):
         try:
             with open(_RUN_LOCK_FILE, "r", encoding="utf-8") as f:
                 last_run = float(f.read().strip())
             if time.time() - last_run < _MIN_RUN_INTERVAL_SECONDS:
-                print(
-                    f"⏳ Слишком частый запуск. Пропускаем "
-                    f"({int(time.time() - last_run)} сек назад был запуск)."
-                )
+                print(f"⏳ Слишком частый запуск ({int(time.time()-last_run)}с назад). Пропускаем.")
                 return False
-        except (ValueError, OSError):
-            pass
+        except (ValueError, OSError): pass
     with open(_RUN_LOCK_FILE, "w", encoding="utf-8") as f:
         f.write(str(time.time()))
     return True
 
-
-# ---------- posted_ids с автоочисткой старых записей ----------
+# ---------- posted_ids ----------
 def load_posted_ids():
     if os.path.exists(STATE_FILE):
         try:
             with open(STATE_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            # Миграция со старого формата (список) на новый (словарь с датами)
             if isinstance(data, list):
                 today = datetime.now(zoneinfo.ZoneInfo(TIMEZONE)).strftime("%Y-%m-%d")
-                return {vid: today for vid in data}
-            elif isinstance(data, dict):
-                return data
+                return {vid:today for vid in data}
+            elif isinstance(data, dict): return data
         except (json.JSONDecodeError, OSError) as e:
-            print(f"⚠️ Ошибка чтения posted_ids, создаём заново: {e}", file=sys.stderr)
+            print(f"⚠️ Ошибка posted_ids: {e}", file=sys.stderr)
     return {}
-
 
 def save_posted_ids(ids_dict):
     with open(STATE_FILE, "w", encoding="utf-8") as f:
         json.dump(ids_dict, f, ensure_ascii=False, indent=2)
 
-
 def clean_old_posted_ids(posted_ids, days=_POSTED_IDS_MAX_AGE_DAYS):
-    """Удаляем ID старше N дней — файл не разрастётся бесконечно."""
-    if not posted_ids:
-        return posted_ids
+    if not posted_ids: return posted_ids
     today = datetime.now(zoneinfo.ZoneInfo(TIMEZONE)).date()
     to_remove = []
     for vid, date_str in list(posted_ids.items()):
         try:
             post_date = datetime.strptime(date_str, "%Y-%m-%d").date()
-            if (today - post_date).days > days:
-                to_remove.append(vid)
-        except (ValueError, TypeError):
-            to_remove.append(vid)
-    for vid in to_remove:
-        del posted_ids[vid]
-    if to_remove:
-        print(f"🧹 Очищено старых ID: {len(to_remove)} (старше {days} дней)")
+            if (today - post_date).days > days: to_remove.append(vid)
+        except (ValueError, TypeError): to_remove.append(vid)
+    for vid in to_remove: del posted_ids[vid]
+    if to_remove: print(f"🧹 Очищено старых ID: {len(to_remove)}")
     return posted_ids
 
-
-# ---------- Рандомные видео (отдельный трекинг) ----------
+# ---------- Random posted ----------
 def load_random_posted_ids():
-    if os.path.exists(RANDOM_POSTED_STATE_FILE):
+    if os.path.exists(RANDOM_FILE):
         try:
-            with open(RANDOM_POSTED_STATE_FILE, "r", encoding="utf-8") as f:
+            with open(RANDOM_FILE, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except (json.JSONDecodeError, OSError) as e:
-            print(f"⚠️ Ошибка чтения random_posted_ids: {e}", file=sys.stderr)
+        except (json.JSONDecodeError, OSError): pass
     return {}
-
-
 def save_random_posted_ids(ids_dict):
-    with open(RANDOM_POSTED_STATE_FILE, "w", encoding="utf-8") as f:
+    with open(RANDOM_FILE, "w", encoding="utf-8") as f:
         json.dump(ids_dict, f, ensure_ascii=False, indent=2)
 
-
 def clean_old_random_posted_ids(random_posted_ids, days=_RANDOM_POSTED_MAX_AGE_DAYS):
-    if not random_posted_ids:
-        return random_posted_ids
+    if not random_posted_ids: return random_posted_ids
     today = datetime.now(zoneinfo.ZoneInfo(TIMEZONE)).date()
     to_remove = []
     for vid, date_str in list(random_posted_ids.items()):
         try:
             post_date = datetime.strptime(date_str, "%Y-%m-%d").date()
-            if (today - post_date).days > days:
-                to_remove.append(vid)
-        except (ValueError, TypeError):
-            to_remove.append(vid)
-    for vid in to_remove:
-        del random_posted_ids[vid]
-    if to_remove:
-        print(f"🧹 Очищено старых random ID: {len(to_remove)} (старше {days} дней)")
+            if (today - post_date).days > days: to_remove.append(vid)
+        except (ValueError, TypeError): to_remove.append(vid)
+    for vid in to_remove: del random_posted_ids[vid]
+    if to_remove: print(f"🧹 Очищено старых random ID: {len(to_remove)}")
     return random_posted_ids
 
-
 def get_all_uploads(max_pages=_MAX_PAGES_FOR_RANDOM):
-    """Получает видео из uploads плейлиста с пагинацией (ограничено max_pages)."""
     playlist_id = get_uploads_playlist_id()
-    if not playlist_id:
-        return []
-
-    video_ids = []
-    next_page_token = None
-    pages = 0
-
+    if not playlist_id: return []
+    video_ids, next_page_token, pages = [], None, 0
     while pages < max_pages:
-        params = {
-            "part": "snippet",
-            "playlistId": playlist_id,
-            "maxResults": 50,
-            "key": YOUTUBE_API_KEY,
-        }
-        if next_page_token:
-            params["pageToken"] = next_page_token
-
+        params = {"part":"snippet","playlistId":playlist_id,"maxResults":50,"key":YOUTUBE_API_KEY}
+        if next_page_token: params["pageToken"] = next_page_token
         try:
-            data = http_get_json(
-                "https://www.googleapis.com/youtube/v3/playlistItems",
-                params,
-            )
+            data = http_get_json("https://www.googleapis.com/youtube/v3/playlistItems", params)
         except Exception as e:
-            print(f"⚠️ Ошибка загрузки страницы uploads: {e}", file=sys.stderr)
-            break
-
-        for item in data.get("items", []):
-            vid = item["snippet"]["resourceId"]["videoId"]
-            video_ids.append(vid)
-
-        next_page_token = data.get("nextPageToken")
-        pages += 1
-        if not next_page_token:
-            break
-
+            print(f"⚠️ Ошибка загрузки uploads: {e}", file=sys.stderr); break
+        for item in data.get("items",[]): video_ids.append(item["snippet"]["resourceId"]["videoId"])
+        next_page_token = data.get("nextPageToken"); pages += 1
+        if not next_page_token: break
     return video_ids
 
-
 def get_random_unposted_video(posted_ids, random_posted_ids):
-    """Возвращает случайное видео, которое не публиковалось ни как новое, ни как рандомное."""
     all_videos = get_all_uploads()
-
     available = [vid for vid in all_videos if vid not in posted_ids and vid not in random_posted_ids]
+    return random.choice(available) if available else None
 
-    if not available:
-        return None
-    return random.choice(available)
-
-
-# ---------- Состояния ----------
-def load_last_milestone():
-    if os.path.exists(MILESTONE_STATE_FILE):
+# ---------- Live poll state ----------
+def load_live_poll_state():
+    if os.path.exists(LIVE_POLL_FILE):
         try:
-            with open(MILESTONE_STATE_FILE, "r", encoding="utf-8") as f:
-                return json.load(f).get("last_milestone", 0), True
-        except (json.JSONDecodeError, OSError):
-            pass
+            with open(LIVE_POLL_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError): pass
+    return {}
+
+def save_live_poll_state(state):
+    with open(LIVE_POLL_FILE, "w", encoding="utf-8") as f:
+        json.dump(state, f, ensure_ascii=False, indent=2)
+
+def clean_live_poll_state(state):
+    if not state: return state
+    now = datetime.now(timezone.utc)
+    to_remove = []
+    for vid, data in list(state.items()):
+        try:
+            announced = datetime.fromisoformat(data.get("announced_at",""))
+            if (now - announced).total_seconds() > 43200: to_remove.append(vid)
+        except (ValueError, TypeError): to_remove.append(vid)
+    for vid in to_remove: del state[vid]
+    if to_remove: print(f"🧹 Очищено старых live-poll: {len(to_remove)}")
+    return state
+
+# ---------- Milestone ----------
+def load_last_milestone():
+    if os.path.exists(MILESTONE_FILE):
+        try:
+            with open(MILESTONE_FILE, "r", encoding="utf-8") as f:
+                return json.load(f).get("last_milestone",0), True
+        except (json.JSONDecodeError, OSError): pass
     return 0, False
-
-
 def save_last_milestone(value):
-    with open(MILESTONE_STATE_FILE, "w", encoding="utf-8") as f:
-        json.dump({"last_milestone": value}, f, ensure_ascii=False, indent=2)
+    with open(MILESTONE_FILE, "w", encoding="utf-8") as f:
+        json.dump({"last_milestone":value}, f, ensure_ascii=False, indent=2)
 
-
-# ---------- HTTP с timeout ----------
+# ---------- HTTP ----------
 def http_get_json(url, params, timeout=15):
     query = urllib.parse.urlencode(params)
     full_url = f"{url}?{query}"
@@ -278,169 +208,152 @@ def http_get_json(url, params, timeout=15):
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         error_body = e.read().decode("utf-8")
-        print(f"HTTP {e.code} ошибка при запросе к {url}", file=sys.stderr)
-        print(f"Подробности: {error_body}", file=sys.stderr)
-        raise
+        print(f"HTTP {e.code}: {url}", file=sys.stderr)
+        print(f"Подробности: {error_body}", file=sys.stderr); raise
     except urllib.error.URLError as e:
-        print(f"Сетевая ошибка при запросе к {url}: {e.reason}", file=sys.stderr)
-        raise
-
+        print(f"Сеть: {url} — {e.reason}", file=sys.stderr); raise
 
 # ---------- YouTube ----------
 def get_uploads_playlist_id():
-    data = http_get_json(
-        "https://www.googleapis.com/youtube/v3/channels",
-        {
-            "part": "contentDetails",
-            "id": YOUTUBE_CHANNEL_ID,
-            "key": YOUTUBE_API_KEY,
-        },
-    )
-    items = data.get("items", [])
-    if not items:
-        return None
-    return items[0]["contentDetails"]["relatedPlaylists"]["uploads"]
-
+    data = http_get_json("https://www.googleapis.com/youtube/v3/channels",
+                         {"part":"contentDetails","id":YOUTUBE_CHANNEL_ID,"key":YOUTUBE_API_KEY})
+    items = data.get("items",[])
+    return items[0]["contentDetails"]["relatedPlaylists"]["uploads"] if items else None
 
 def find_candidate_videos():
     playlist_id = get_uploads_playlist_id()
-    if not playlist_id:
-        return []
-
-    data = http_get_json(
-        "https://www.googleapis.com/youtube/v3/playlistItems",
-        {
-            "part": "snippet",
-            "playlistId": playlist_id,
-            "maxResults": 50,
-            "key": YOUTUBE_API_KEY,
-        },
-    )
-    return [item["snippet"]["resourceId"]["videoId"] for item in data.get("items", [])]
-
+    if not playlist_id: return []
+    data = http_get_json("https://www.googleapis.com/youtube/v3/playlistItems",
+                         {"part":"snippet","playlistId":playlist_id,"maxResults":50,"key":YOUTUBE_API_KEY})
+    return [it["snippet"]["resourceId"]["videoId"] for it in data.get("items",[])]
 
 def get_video_details_batch(video_ids):
-    if not video_ids:
-        return {}
-    data = http_get_json(
-        "https://www.googleapis.com/youtube/v3/videos",
-        {
-            "part": "snippet,liveStreamingDetails,contentDetails",
-            "id": ",".join(video_ids),
-            "key": YOUTUBE_API_KEY,
-        },
-    )
-    return {item["id"]: item for item in data.get("items", [])}
-
+    if not video_ids: return {}
+    data = http_get_json("https://www.googleapis.com/youtube/v3/videos",
+                         {"part":"snippet,liveStreamingDetails,contentDetails",
+                          "id":",".join(video_ids),"key":YOUTUBE_API_KEY})
+    return {it["id"]:it for it in data.get("items",[])}
 
 def get_channel_info():
-    data = http_get_json(
-        "https://www.googleapis.com/youtube/v3/channels",
-        {
-            "part": "snippet,statistics",
-            "id": YOUTUBE_CHANNEL_ID,
-            "key": YOUTUBE_API_KEY,
-        },
-    )
-    items = data.get("items", [])
-    if not items:
-        return None, None
-    count = int(items[0]["statistics"]["subscriberCount"])
-    title = items[0]["snippet"]["title"]
-    return count, title
-
+    data = http_get_json("https://www.googleapis.com/youtube/v3/channels",
+                         {"part":"snippet,statistics","id":YOUTUBE_CHANNEL_ID,"key":YOUTUBE_API_KEY})
+    items = data.get("items",[])
+    if not items: return None, None
+    return int(items[0]["statistics"]["subscriberCount"]), items[0]["snippet"]["title"]
 
 def best_thumbnail(thumbnails):
-    for key in ("maxres", "standard", "high", "medium", "default"):
-        if key in thumbnails:
-            return thumbnails[key]["url"]
+    for k in ("maxres","standard","high","medium","default"):
+        if k in thumbnails: return thumbnails[k]["url"]
     return None
-
 
 def format_start_time(iso_ts):
-    dt_utc = datetime.fromisoformat(iso_ts.replace("Z", "+00:00")).astimezone(timezone.utc)
-
+    dt_utc = datetime.fromisoformat(iso_ts.replace("Z","+00:00")).astimezone(timezone.utc)
     local = dt_utc.astimezone(zoneinfo.ZoneInfo(TIMEZONE))
     main_str = local.strftime("%d.%m.%Y в %H:%M") + f" ({TIMEZONE_LABEL})"
-
     second = dt_utc.astimezone(zoneinfo.ZoneInfo(SECOND_TIMEZONE))
     second_str = second.strftime("%H:%M") + f" ({SECOND_TIMEZONE_LABEL})"
-
     return f"{main_str} / {second_str}"
 
-
 def parse_duration_seconds(iso_duration):
-    match = re.match(
-        r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", iso_duration or ""
-    )
-    if not match:
-        return 0
-    hours, minutes, seconds = (int(g) if g else 0 for g in match.groups())
-    return hours * 3600 + minutes * 60 + seconds
-
+    m = re.match(r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", iso_duration or "")
+    if not m: return 0
+    h, mn, s = (int(g) if g else 0 for g in m.groups())
+    return h*3600 + mn*60 + s
 
 def extract_video_id(url):
-    if not url or not url.strip():
-        return None
-    patterns = [
-        r"(?:v=|\/)([0-9A-Za-z_-]{11})",
-        r"(?:embed\/)([0-9A-Za-z_-]{11})",
-        r"(?:youtu\.be\/)([0-9A-Za-z_-]{11})",
-        r"(?:shorts\/)([0-9A-Za-z_-]{11})",
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, url)
-        if match:
-            return match.group(1)
+    if not url or not url.strip(): return None
+    for pat in [r"(?:v=|\/)([0-9A-Za-z_-]{11})",r"(?:embed\/)([0-9A-Za-z_-]{11})",
+                r"(?:youtu\.be\/)([0-9A-Za-z_-]{11})",r"(?:shorts\/)([0-9A-Za-z_-]{11})"]:
+        m = re.search(pat, url)
+        if m: return m.group(1)
     return None
 
-
-# ---------- Эмодзи ----------
+# ---------- Emojis ----------
 GAME_EMOJIS = [
-    ("gta", "🚗"),
-    ("гта", "🚗"),
-    ("farcry", "🔫"),
-    ("far cry", "🔫"),
-    ("cyberpunk", "🤖"),
-    ("cs2", "🔫"),
-    ("csgo", "🔫"),
-    ("cs 1.6", "🔫"),
-    ("counter-strike", "🔫"),
-    ("minecraft", "⛏️"),
-    ("майнкрафт", "⛏️"),
-    ("f1", "🏎️"),
-    ("formula", "🏎️"),
-    ("fifa", "⚽"),
-    ("repo", "🤖"),
-    ("battlefield", "💣"),
-    ("valorant", "🔫"),
-    ("dota", "⚔️"),
-    ("fortnite", "🔫"),
-    ("warzone", "🔫"),
-    ("elden ring", "⚔️"),
-    ("stalker", "☢️"),
-    ("roblox", "🧱"),
-    ("apex", "🔫"),
-    ("overwatch", "🔫"),
-    ("wow", "⚔️"),
-    ("world of warcraft", "⚔️"),
-    ("rocket league", "⚽"),
-    ("fall guys", "🎮"),
-    ("among us", "🎮"),
+    ("gta","🚗"),("гта","🚗"),("farcry","🔫"),("far cry","🔫"),("cyberpunk","🤖"),
+    ("cs2","🔫"),("csgo","🔫"),("cs 1.6","🔫"),("counter-strike","🔫"),
+    ("minecraft","⛏️"),("майнкрафт","⛏️"),("f1","🏎️"),("formula","🏎️"),("fifa","⚽"),
+    ("repo","🤖"),("battlefield","💣"),("valorant","🔫"),("dota","⚔️"),("fortnite","🔫"),
+    ("warzone","🔫"),("elden ring","⚔️"),("stalker","☢️"),("roblox","🧱"),("apex","🔫"),
+    ("overwatch","🔫"),("wow","⚔️"),("world of warcraft","⚔️"),("rocket league","⚽"),
+    ("fall guys","🎮"),("among us","🎮"),
 ]
-
 DEFAULT_THEME_EMOJI = "🔴"
-
 
 def detect_theme_emoji(title):
     lowered = title.lower()
-    for keyword, emoji in GAME_EMOJIS:
-        if keyword in lowered:
-            return emoji
+    for kw, em in GAME_EMOJIS:
+        if kw in lowered: return em
     return DEFAULT_THEME_EMOJI
 
+# ---------- Poll config ----------
+GAME_POLL_CONFIG = {
+    "gta": {"question":"🚗 Какие карты сегодня будем проходить?",
+            "options":["Паркуры","Скилл-тесты","Ларги","Стенки","Спуски","Дрифт-трассы","Паркур-лолы"]},
+    "гта": {"question":"🚗 Какие карты сегодня будем проходить?",
+            "options":["Паркуры","Скилл-тесты","Ларги","Стенки","Спуски","Дрифт-трассы","Паркур-лолы"]},
+    "cs2": {"question":"🔫 Какой режим сегодня ждёте?",
+            "options":["ММ (соло)","FaceIt","Кастомки","Зомби-мод","1v1 Арена","Эскалация"]},
+    "csgo": {"question":"🔫 Какой режим сегодня ждёте?",
+             "options":["ММ (соло)","FaceIt","Кастомки","Зомби-мод","1v1 Арена","Эскалация"]},
+    "minecraft": {"question":"⛏️ Что строим/делаем сегодня?",
+                  "options":["Хардкор выживание","Паркур карта","ПвП арена","Авто-ферма","Бедварс","Скайблок"]},
+    "майнкрафт": {"question":"⛏️ Что строим/делаем сегодня?",
+                  "options":["Хардкор выживание","Паркур карта","ПвП арена","Авто-ферма","Бедварс","Скайблок"]},
+    "fifa": {"question":"⚽ Какой режим FIFA сегодня?",
+             "options":["FUT Champions","Карьера","Pro Clubs","Volta","Драфт"]},
+    "f1": {"question":"🏎️ Какой формат гонки сегодня?",
+           "options":["Гранд-При (50%)","Гранд-При (100%)","Спринт","Квалификация","Мультиплеер"]},
+    "formula": {"question":"🏎️ Какой формат гонки сегодня?",
+                "options":["Гранд-При (50%)","Гранд-При (100%)","Спринт","Квалификация","Мультиплеер"]},
+    "cyberpunk": {"question":"🤖 Что сегодня в Cyberpunk?",
+                  "options":["Сюжетка","Рандомные квесты","Полиция vs Гангстеры","Фотомод","Боссы"]},
+    "repo": {"question":"🤖 Какой уровень сложности в Repo?",
+             "options":["Лёгкий","Средний","Сложный","Кошмар","Соло-челлендж"]},
+    "battlefield": {"question":"💣 Какой режим Battlefield сегодня?",
+                    "options":["Захват","Прорыв","Штурм","Техника","Снайпер only"]},
+    "valorant": {"question":"🔫 Какой агент/режим в Valorant?",
+                 "options":["Рейтинг","Связка","Дезматч","Эскалация","Кастомки"]},
+    "dota": {"question":"⚔️ Какая роль сегодня в Dota?",
+             "options":["Керри","Мид","Оффлейн","Саппорт 4","Саппорт 5","Все рандом"]},
+    "fortnite": {"question":"🔫 Что играем в Fortnite?",
+                 "options":["Рояль","Творческий","ЗБС","Ранкед","Кастомки"]},
+    "warzone": {"question":"🔫 Какой режим Warzone?",
+                "options":["Большая карта","Решта","Ранкед","Соло","Отряд"]},
+    "elden ring": {"question":"⚔️ Что сегодня в Elden Ring?",
+                   "options":["Боссы","ПвП арена","НГ+","Кооп","Исследование"]},
+    "stalker": {"question":"☢️ Какая зона сегодня в Stalker?",
+                "options":["Кордон","Бар","Припять","ЧАЭС","Подземелья","Аномалии"]},
+    "roblox": {"question":"🧱 Какая игра в Roblox сегодня?",
+               "options":["Doors","Tower of Hell","Brookhaven","BedWars","Мини-игры"]},
+    "apex": {"question":"🔫 Какой режим Apex сегодня?",
+             "options":["Баттл-ройал","Арена","Ранкед","ЛТМ","Трио"]},
+    "overwatch": {"question":"🔫 Какой режим Overwatch?",
+                  "options":["Рейтинг","Быстрая игра","Аркада","Кастомки","Пуш"]},
+    "wow": {"question":"⚔️ Что сегодня в WoW?",
+            "options":["Подземелья","Рейд","PvP","Прокачка","Торговля"]},
+    "world of warcraft": {"question":"⚔️ Что сегодня в WoW?",
+                          "options":["Подземелья","Рейд","PvP","Прокачка","Торговля"]},
+    "rocket league": {"question":"⚽ Какой режим Rocket League?",
+                      "options":["1v1","2v2","3v3","Хоккей","Румбл","Дропшот"]},
+    "fall guys": {"question":"🎮 Какой раунд Fall Guys ждёте?",
+                  "options":["Захват короны","Командные","Выживание","Гонки","Финал"]},
+    "among us": {"question":"🎮 Какая карта Among Us сегодня?",
+                 "options":["The Skeld","MIRA HQ","Polus","Airship","Fungle"]},
+    "farcry": {"question":"🔫 Что сегодня в Far Cry?",
+               "options":["Сюжет","Аванпосты","Охота","Кооп","Экспедиции"]},
+    "far cry": {"question":"🔫 Что сегодня в Far Cry?",
+                "options":["Сюжет","Аванпосты","Охота","Кооп","Экспедиции"]},
+}
 
-# ---------- Шаблоны ----------
+def detect_game_for_poll(title):
+    lowered = title.lower()
+    for keyword, config in GAME_POLL_CONFIG.items():
+        if keyword in lowered:
+            return config
+    return None
+
+# ---------- Templates ----------
 LIVE_TEMPLATES = [
     "{emoji} Внимание! {channel} начал стрим прямо сейчас!\n«{title}»\nЗаходи, пока горячо 👇",
     "{emoji} Мы уже в эфире! {channel} стримит:\n«{title}»\nПодключайся, будет интересно!",
@@ -506,91 +419,71 @@ RANDOM_TEMPLATES = [
     "{emoji} Внезапно: «{title}» от {channel}!\nОтличный повод вернуться к старым видео",
 ]
 
-
 def generate_announcement_text(content_type, title, channel_title, start_time_str=""):
-    templates_map = {
-        "live": LIVE_TEMPLATES,
-        "upcoming": UPCOMING_TEMPLATES,
-        "video": VIDEO_TEMPLATES,
-        "shorts": SHORTS_TEMPLATES,
-        "random": RANDOM_TEMPLATES,
-    }
-    template = random.choice(templates_map[content_type])
-    emoji = detect_theme_emoji(title)
-    return template.format(channel=channel_title, title=title, when=start_time_str, emoji=emoji)
-
+    tm = {"live":LIVE_TEMPLATES,"upcoming":UPCOMING_TEMPLATES,
+          "video":VIDEO_TEMPLATES,"shorts":SHORTS_TEMPLATES,"random":RANDOM_TEMPLATES}
+    tpl = random.choice(tm[content_type])
+    return tpl.format(channel=channel_title, title=title, when=start_time_str, emoji=detect_theme_emoji(title))
 
 # ---------- Telegram ----------
 def send_telegram_message(chat_id, text):
-    body = urllib.parse.urlencode(
-        {
-            "chat_id": chat_id,
-            "text": text,
-        }
-    ).encode("utf-8")
-    req = urllib.request.Request(
-        f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-        data=body,
-        method="POST",
-    )
+    body = urllib.parse.urlencode({"chat_id":chat_id,"text":text}).encode("utf-8")
+    req = urllib.request.Request(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                                 data=body, method="POST")
     with urllib.request.urlopen(req, timeout=30) as resp:
         result = json.loads(resp.read().decode("utf-8"))
     if not result.get("ok"):
         raise RuntimeError(f"Telegram error: {result}")
     return result
-
 
 def react_to_message(chat_id, message_id, emoji="🔥"):
-    body = urllib.parse.urlencode(
-        {
-            "chat_id": chat_id,
-            "message_id": message_id,
-            "reaction": json.dumps([{"type": "emoji", "emoji": emoji}]),
-        }
-    ).encode("utf-8")
-    req = urllib.request.Request(
-        f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/setMessageReaction",
-        data=body,
-        method="POST",
-    )
+    body = urllib.parse.urlencode({
+        "chat_id":chat_id,"message_id":message_id,
+        "reaction":json.dumps([{"type":"emoji","emoji":emoji}]),
+    }).encode("utf-8")
+    req = urllib.request.Request(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/setMessageReaction",
+                                 data=body, method="POST")
     with urllib.request.urlopen(req, timeout=30) as resp:
         result = json.loads(resp.read().decode("utf-8"))
     if not result.get("ok"):
         raise RuntimeError(f"Telegram error: {result}")
     return result
 
-
 def send_telegram_photo(photo_url, caption, buttons=None):
-    params = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "photo": photo_url,
-        "caption": caption,
-    }
+    params = {"chat_id":TELEGRAM_CHAT_ID,"photo":photo_url,"caption":caption}
     if buttons:
-        params["reply_markup"] = json.dumps({"inline_keyboard": [buttons]})
-
+        params["reply_markup"] = json.dumps({"inline_keyboard":[buttons]})
     body = urllib.parse.urlencode(params).encode("utf-8")
-    req = urllib.request.Request(
-        f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto",
-        data=body,
-        method="POST",
-    )
+    req = urllib.request.Request(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto",
+                                 data=body, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             result = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
-        error_body = e.read().decode("utf-8")
-        print(f"❌ Telegram HTTP {e.code}: {error_body}", file=sys.stderr)
-        print(f"📊 Длина caption: {len(caption)} символов", file=sys.stderr)
-        print(f"🔗 URL фото: {photo_url}", file=sys.stderr)
-        print(f"🔘 Кнопки: {buttons}", file=sys.stderr)
-        raise RuntimeError(f"Telegram error {e.code}: {error_body}")
-
+        print(f"❌ Telegram HTTP {e.code}: {e.read().decode('utf-8')}", file=sys.stderr)
+        print(f"📊 Caption: {len(caption)} симв.", file=sys.stderr)
+        raise RuntimeError(f"Telegram error {e.code}")
     if not result.get("ok"):
-        print(f"❌ Telegram API error: {result}", file=sys.stderr)
         raise RuntimeError(f"Telegram error: {result}")
     return result
 
+def send_telegram_poll(chat_id, question, options, allows_multiple=True):
+    body = urllib.parse.urlencode({
+        "chat_id": chat_id,
+        "question": question,
+        "options": json.dumps(options),
+        "is_anonymous": "false",
+        "allows_multiple_answers": "true" if allows_multiple else "false",
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPoll",
+        data=body, method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        result = json.loads(resp.read().decode("utf-8"))
+    if not result.get("ok"):
+        raise RuntimeError(f"Telegram poll error: {result}")
+    return result
 
 # ---------- Milestone ----------
 MILESTONE_TEMPLATES = [
@@ -599,294 +492,246 @@ MILESTONE_TEMPLATES = [
     "🥳 {count} подписчиков у {channel}!\nСпасибо за поддержку, дальше — больше!",
 ]
 
-
 def check_subscriber_milestone(stats):
-    """Проверяет milestones и обновляет stats при публикации."""
     try:
         count, channel_title = get_channel_info()
     except Exception as e:
-        print(f"Не удалось получить число подписчиков: {e}", file=sys.stderr)
-        return
-
-    if count is None:
-        return
-
-    current_milestone = (count // SUBSCRIBER_MILESTONE_STEP) * SUBSCRIBER_MILESTONE_STEP
-    last_milestone, state_existed = load_last_milestone()
-
-    if not state_existed:
-        save_last_milestone(current_milestone)
-        print(f"Отметка подписчиков инициализирована: {current_milestone}")
-        return
-
-    if current_milestone > last_milestone and current_milestone > 0:
-        text = random.choice(MILESTONE_TEMPLATES).format(
-            channel=channel_title, count=current_milestone
-        )
+        print(f"Не удалось получить число подписчиков: {e}", file=sys.stderr); return
+    if count is None: return
+    current = (count // SUBSCRIBER_MILESTONE_STEP) * SUBSCRIBER_MILESTONE_STEP
+    last, existed = load_last_milestone()
+    if not existed:
+        save_last_milestone(current)
+        print(f"Отметка подписчиков инициализирована: {current}"); return
+    if current > last and current > 0:
+        text = random.choice(MILESTONE_TEMPLATES).format(channel=channel_title, count=current)
         try:
             result = send_telegram_message(TELEGRAM_CHAT_ID, text)
-            print(f"Опубликовано поздравление с {current_milestone} подписчиками")
+            print(f"Опубликовано поздравление с {current} подписчиками")
             increment_posts(stats)
             try:
-                message_id = result["result"]["message_id"]
-                react_to_message(TELEGRAM_CHAT_ID, message_id, "🎉")
+                react_to_message(TELEGRAM_CHAT_ID, result["result"]["message_id"], "🎉")
             except Exception as e:
                 print(f"Не удалось поставить реакцию: {e}", file=sys.stderr)
         except Exception as e:
             print(f"Ошибка отправки поздравления: {e}", file=sys.stderr)
-            increment_errors(stats)
-            return
-        save_last_milestone(current_milestone)
-
+            increment_errors(stats); return
+        save_last_milestone(current)
 
 # ---------- Main ----------
 SHORTS_MAX_DURATION_SECONDS = 60
 MAX_POSTS_PER_RUN = 3
 SECONDS_BETWEEN_POSTS = 3
-CATCH_UP_ONLY = os.environ.get("CATCH_UP_ONLY", "false").lower() == "true"
-
-FORCE_VIDEO_URL = os.environ.get("FORCE_VIDEO_URL", "")
-
+CATCH_UP_ONLY = os.environ.get("CATCH_UP_ONLY","false").lower() == "true"
+FORCE_VIDEO_URL = os.environ.get("FORCE_VIDEO_URL","")
 
 def main():
-    # --- Загружаем статистику и проверяем дату ---
     stats = load_stats()
     now = datetime.now(zoneinfo.ZoneInfo("Europe/Moscow"))
     today_str = now.strftime("%Y-%m-%d")
 
-    # Если наступил новый день — сбрасываем счётчики
     if stats.get("current_date") != today_str:
-        stats = {
-            "current_date": today_str,
-            "posts_today": 0,
-            "errors_today": 0,
-            "report_sent_today": False,
-            "random_sent_today": False,
-        }
+        stats = {"current_date":today_str,"posts_today":0,"errors_today":0,
+                 "report_sent_today":False,"random_sent_today":False}
 
-    # Отчёт в 23:00 МСК (ловим в диапазоне 23:00–23:59)
     if now.hour == 23 and not stats.get("report_sent_today", False):
         try:
             send_daily_report(stats)
             stats["report_sent_today"] = True
         except Exception as e:
-            print(f"❌ Ошибка отправки отчёта: {e}", file=sys.stderr)
+            print(f"❌ Ошибка отчёта: {e}", file=sys.stderr)
             increment_errors(stats)
         save_stats(stats)
 
-    # --- Защита от частых запусков ---
     if not _check_rate_limit():
-        save_stats(stats)
-        return
+        save_stats(stats); return
 
-    # --- Загружаем и чистим posted_ids ---
     posted_ids = load_posted_ids()
-    posted_ids = clean_old_posted_ids(posted_ids, days=_POSTED_IDS_MAX_AGE_DAYS)
+    posted_ids = clean_old_posted_ids(posted_ids)
 
-    # --- Рандомное видео дня в 15:00 МСК ---
+    # --- Random video at 15:00 ---
     if now.hour == 15 and not stats.get("random_sent_today", False):
         random_posted_ids = load_random_posted_ids()
-        random_posted_ids = clean_old_random_posted_ids(
-            random_posted_ids, days=_RANDOM_POSTED_MAX_AGE_DAYS
-        )
-
-        random_video_id = get_random_unposted_video(posted_ids, random_posted_ids)
-        if random_video_id:
-            print(f"🎲 Выбрано рандомное видео: {random_video_id}")
+        random_posted_ids = clean_old_random_posted_ids(random_posted_ids)
+        rvid = get_random_unposted_video(posted_ids, random_posted_ids)
+        if rvid:
+            print(f"🎲 Рандом: {rvid}")
             try:
-                details = get_video_details_batch([random_video_id]).get(random_video_id)
-                if details:
-                    snippet = details["snippet"]
-                    title = snippet["title"]
-                    channel_title = snippet["channelTitle"]
-                    thumbnail_url = best_thumbnail(snippet["thumbnails"])
-
-                    text = generate_announcement_text("random", title, channel_title)
-                    video_link = f"https://www.youtube.com/watch?v={random_video_id}"
-                    buttons = [{"text": "▶️ YouTube", "url": video_link}]
-
-                    print(f"📤 Попытка отправки рандомного: {title} ({random_video_id})")
-                    result = send_telegram_photo(thumbnail_url, text, buttons)
-                    print(f"✅ Рандомное видео опубликовано: {title} ({random_video_id})")
+                det = get_video_details_batch([rvid]).get(rvid)
+                if det:
+                    snip = det["snippet"]
+                    title, chtitle = snip["title"], snip["channelTitle"]
+                    thumb = best_thumbnail(snip["thumbnails"])
+                    text = generate_announcement_text("random", title, chtitle)
+                    link = f"https://www.youtube.com/watch?v={rvid}"
+                    res = send_telegram_photo(thumb, text, [{"text":"▶️ YouTube","url":link}])
+                    print(f"✅ Рандом опубликован: {title}")
                     increment_posts(stats)
                     try:
-                        message_id = result["result"]["message_id"]
-                        react_to_message(TELEGRAM_CHAT_ID, message_id, "❤️")
+                        react_to_message(TELEGRAM_CHAT_ID, res["result"]["message_id"], "❤️")
                     except Exception as e:
-                        print(f"Не удалось поставить реакцию: {e}", file=sys.stderr)
-
-                    # ФИКС: добавляем в posted_ids, чтобы не задублировать как "новое видео"
-                    posted_ids[random_video_id] = today_str
-                    save_posted_ids(posted_ids)
-
-                    random_posted_ids[random_video_id] = today_str
-                    save_random_posted_ids(random_posted_ids)
+                        print(f"Реакция не поставлена: {e}", file=sys.stderr)
+                    posted_ids[rvid] = today_str; save_posted_ids(posted_ids)
+                    random_posted_ids[rvid] = today_str; save_random_posted_ids(random_posted_ids)
                     stats["random_sent_today"] = True
                 else:
-                    print(
-                        f"⚠️ Нет деталей для рандомного видео {random_video_id}",
-                        file=sys.stderr,
-                    )
+                    print(f"⚠️ Нет деталей для {rvid}", file=sys.stderr)
                     increment_errors(stats)
             except Exception as e:
-                print(f"❌ Ошибка отправки рандомного видео: {e}", file=sys.stderr)
+                print(f"❌ Ошибка рандома: {e}", file=sys.stderr)
                 increment_errors(stats)
         else:
-            print(
-                "ℹ️ Нет доступных видео для рандомной публикации (все уже были опубликованы)"
-            )
-
+            print("ℹ️ Нет видео для рандома")
         save_stats(stats)
 
-    # --- Основная логика: новые видео/стримы ---
-    candidates = []
+    # --- Main logic ---
     try:
         candidates = find_candidate_videos()
     except Exception as e:
-        print(f"❌ Ошибка получения видео с YouTube: {e}", file=sys.stderr)
-        increment_errors(stats)
-        save_posted_ids(posted_ids)
-        save_stats(stats)
-        return
+        print(f"❌ Ошибка YouTube: {e}", file=sys.stderr)
+        increment_errors(stats); save_posted_ids(posted_ids); save_stats(stats); return
 
     candidates_to_check = [vid for vid in candidates if vid not in posted_ids]
+    force_id = extract_video_id(FORCE_VIDEO_URL)
+    if force_id:
+        print(f"🔗 Принудительно: {force_id}")
+        if force_id in posted_ids:
+            posted_ids.pop(force_id, None)
+            print("🔄 Удалено из posted_ids")
+        if force_id not in candidates_to_check:
+            candidates_to_check.insert(0, force_id)
 
-    force_video_id = extract_video_id(FORCE_VIDEO_URL)
-    if force_video_id:
-        print(f"🔗 Принудительная публикация: {force_video_id}")
-        if force_video_id in posted_ids:
-            posted_ids.pop(force_video_id, None)
-            print(f"🔄 Удалено из posted_ids для повторной публикации")
-        if force_video_id not in candidates_to_check:
-            candidates_to_check.insert(0, force_video_id)
-
-    print(f"📋 Найдено {len(candidates)} видео в плейлисте")
-    print(f"🆕 Новых (не в posted_ids): {len(candidates_to_check)}")
+    print(f"📋 {len(candidates)} видео, 🆕 {len(candidates_to_check)} новых")
 
     if CATCH_UP_ONLY:
-        today_str_main = datetime.now(zoneinfo.ZoneInfo(TIMEZONE)).strftime("%Y-%m-%d")
-        for vid in candidates_to_check:
-            posted_ids[vid] = today_str_main
+        tsm = datetime.now(zoneinfo.ZoneInfo(TIMEZONE)).strftime("%Y-%m-%d")
+        for vid in candidates_to_check: posted_ids[vid] = tsm
         save_posted_ids(posted_ids)
-        print(
-            f"Режим CATCH_UP_ONLY: помечено как уже показанные - "
-            f"{len(candidates_to_check)} видео. Ничего не опубликовано."
-        )
-        save_stats(stats)
-        return
+        print(f"CATCH_UP_ONLY: {len(candidates_to_check)} помечены.")
+        save_stats(stats); return
 
-    details_by_id = {}
     try:
         details_by_id = get_video_details_batch(candidates_to_check)
     except Exception as e:
-        print(f"❌ Ошибка получения деталей видео: {e}", file=sys.stderr)
-        increment_errors(stats)
-        save_posted_ids(posted_ids)
-        save_stats(stats)
-        return
+        print(f"❌ Ошибка деталей: {e}", file=sys.stderr)
+        increment_errors(stats); save_posted_ids(posted_ids); save_stats(stats); return
 
     new_posts = 0
-    today_str_main = datetime.now(zoneinfo.ZoneInfo(TIMEZONE)).strftime("%Y-%m-%d")
+    tsm = datetime.now(zoneinfo.ZoneInfo(TIMEZONE)).strftime("%Y-%m-%d")
+    live_poll_state = load_live_poll_state()
+    live_poll_state = clean_live_poll_state(live_poll_state)
 
     for video_id in candidates_to_check:
         if new_posts >= MAX_POSTS_PER_RUN:
-            print(
-                f"Достигнут лимит {MAX_POSTS_PER_RUN} постов за запуск, "
-                f"остальное - в следующий раз"
-            )
-            break
+            print(f"Лимит {MAX_POSTS_PER_RUN} постов достигнут."); break
 
-        details = details_by_id.get(video_id)
-        if not details:
-            print(f"⚠️ Нет деталей для видео {video_id}", file=sys.stderr)
-            increment_errors(stats)
-            continue
+        det = details_by_id.get(video_id)
+        if not det:
+            print(f"⚠️ Нет деталей {video_id}", file=sys.stderr)
+            increment_errors(stats); continue
 
-        snippet = details["snippet"]
-        live_details = details.get("liveStreamingDetails")
-        content_details = details.get("contentDetails", {})
+        snip = det["snippet"]
+        live = det.get("liveStreamingDetails")
+        cd = det.get("contentDetails",{})
+        title = snip["title"]
+        chtitle = snip["channelTitle"]
+        thumb = best_thumbnail(snip["thumbnails"])
+        start_str = ""
 
-        title = snippet["title"]
-        channel_title = snippet["channelTitle"]
-        thumbnail_url = best_thumbnail(snippet["thumbnails"])
-        start_time_str = ""
-
-        if live_details:
-            is_live = (
-                "actualStartTime" in live_details and "actualEndTime" not in live_details
-            )
-            is_upcoming = (
-                "scheduledStartTime" in live_details and "actualStartTime" not in live_details
-            )
-
+        if live:
+            is_live = "actualStartTime" in live and "actualEndTime" not in live
+            is_upcoming = "scheduledStartTime" in live and "actualStartTime" not in live
             if not is_live and not is_upcoming:
-                print(f"⏭️ Пропуск завершённого стрима: {title}")
-                continue
-
-            content_type = "live" if is_live else "upcoming"
-            scheduled_start = live_details.get("scheduledStartTime")
-            start_time_str = format_start_time(scheduled_start) if scheduled_start else ""
+                print(f"⏭️ Пропуск завершённого: {title}"); continue
+            ctype = "live" if is_live else "upcoming"
+            ss = live.get("scheduledStartTime")
+            start_str = format_start_time(ss) if ss else ""
         else:
-            duration_seconds = parse_duration_seconds(content_details.get("duration", ""))
-            content_type = (
-                "shorts" if duration_seconds <= SHORTS_MAX_DURATION_SECONDS else "video"
-            )
+            ds = parse_duration_seconds(cd.get("duration",""))
+            ctype = "shorts" if ds <= SHORTS_MAX_DURATION_SECONDS else "video"
 
         try:
-            text = generate_announcement_text(
-                content_type, title, channel_title, start_time_str
-            )
+            text = generate_announcement_text(ctype, title, chtitle, start_str)
         except Exception as e:
-            print(f"Ошибка генерации текста для {video_id}: {e}", file=sys.stderr)
-            increment_errors(stats)
-            continue
+            print(f"Ошибка текста {video_id}: {e}", file=sys.stderr)
+            increment_errors(stats); continue
 
-        video_link = f"https://www.youtube.com/watch?v={video_id}"
-        caption = text
-
-        # Умные кнопки: Twitch/TikTok только для стримов
-        if content_type in ("live", "upcoming"):
-            buttons = [
-                {"text": "▶️ YouTube", "url": video_link},
-                {"text": "🟣 Twitch", "url": TWITCH_URL},
-                {"text": "⚫️ TikTok", "url": TIKTOK_URL},
-            ]
+        link = f"https://www.youtube.com/watch?v={video_id}"
+        if ctype in ("live","upcoming"):
+            buttons = [{"text":"▶️ YouTube","url":link},
+                       {"text":"🟣 Twitch","url":TWITCH_URL},
+                       {"text":"⚫️ TikTok","url":TIKTOK_URL}]
         else:
-            buttons = [
-                {"text": "▶️ YouTube", "url": video_link},
-            ]
+            buttons = [{"text":"▶️ YouTube","url":link}]
 
-        print(f"📤 Попытка отправки: {title} ({video_id}) | Тип: {content_type}")
-        print(f"   🖼️ Thumbnail: {thumbnail_url}")
-        print(f"   📝 Caption ({len(caption)} симв.): {caption[:100]}...")
-
+        print(f"📤 {title} ({video_id}) | {ctype}")
         try:
-            result = send_telegram_photo(thumbnail_url, caption, buttons)
-            print(f"✅ Опубликовано: {title} ({video_id})")
+            res = send_telegram_photo(thumb, text, buttons)
+            print(f"✅ Опубликовано: {title}")
             increment_posts(stats)
             try:
-                message_id = result["result"]["message_id"]
-                react_to_message(TELEGRAM_CHAT_ID, message_id, "🔥")
+                react_to_message(TELEGRAM_CHAT_ID, res["result"]["message_id"], "🔥")
             except Exception as e:
-                print(f"Не удалось поставить реакцию: {e}", file=sys.stderr)
-        except Exception as e:
-            print(f"❌ Ошибка отправки в Telegram для {video_id}: {e}", file=sys.stderr)
-            increment_errors(stats)
-            continue
+                print(f"Реакция: {e}", file=sys.stderr)
 
-        # ФИКС: сохраняем posted_ids сразу после каждого поста — защита от дублей при падении
-        posted_ids[video_id] = today_str_main
+            if ctype == "live":
+                if video_id not in live_poll_state:
+                    live_poll_state[video_id] = {
+                        "announced_at": datetime.now(timezone.utc).isoformat(),
+                        "poll_sent": False,
+                        "poll_message_id": None,
+                        "title": title,
+                    }
+                    print(f"📝 LIVE {video_id} добавлен в очередь опроса")
+        except Exception as e:
+            print(f"❌ Ошибка Telegram {video_id}: {e}", file=sys.stderr)
+            increment_errors(stats); continue
+
+        posted_ids[video_id] = tsm
         new_posts += 1
         save_posted_ids(posted_ids)
         time.sleep(SECONDS_BETWEEN_POSTS)
 
     save_posted_ids(posted_ids)
-    print(f"Готово. Новых постов: {new_posts}")
+    print(f"Готово. Новых: {new_posts}")
 
-    # ФИКС: milestone тоже учитывается в stats
+    # --- Send delayed polls (5 min after announce) ---
+    now_utc = datetime.now(timezone.utc)
+    for vid, st in list(live_poll_state.items()):
+        if st.get("poll_sent"): continue
+        try:
+            announced = datetime.fromisoformat(st["announced_at"])
+            elapsed = (now_utc - announced).total_seconds()
+        except (ValueError, TypeError):
+            continue
+        if elapsed >= _POLL_DELAY_SECONDS:
+            poll_cfg = detect_game_for_poll(st.get("title",""))
+            if poll_cfg:
+                try:
+                    print(f"📊 Опрос для {vid}: {poll_cfg['question']}")
+                    pres = send_telegram_poll(TELEGRAM_CHAT_ID,
+                                               poll_cfg["question"],
+                                               poll_cfg["options"],
+                                               allows_multiple=True)
+                    st["poll_sent"] = True
+                    st["poll_message_id"] = pres["result"]["message_id"]
+                    increment_posts(stats)
+                    print(f"✅ Опрос отправлен: {poll_cfg['question']}")
+                    try:
+                        react_to_message(TELEGRAM_CHAT_ID, pres["result"]["message_id"], "📊")
+                    except Exception as e:
+                        print(f"Реакция на опрос: {e}", file=sys.stderr)
+                except Exception as e:
+                    print(f"❌ Ошибка опроса {vid}: {e}", file=sys.stderr)
+                    increment_errors(stats)
+            else:
+                print(f"ℹ️ Нет конфига опроса для '{st.get('title','')}' ({vid})")
+                st["poll_sent"] = True
+
+    save_live_poll_state(live_poll_state)
+
     check_subscriber_milestone(stats)
     save_stats(stats)
-
 
 if __name__ == "__main__":
     main()
