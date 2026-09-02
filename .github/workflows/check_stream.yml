@@ -1,6 +1,5 @@
 name: Check YouTube Stream
 
-# Не запускать параллельно — строго по очереди
 concurrency:
   group: bot-run
   cancel-in-progress: false
@@ -25,7 +24,7 @@ permissions:
 jobs:
   check-and-post:
     runs-on: ubuntu-latest
-    timeout-minutes: 10  # Если зависнет — убьёт через 10 минут
+    timeout-minutes: 10
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -51,7 +50,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add posted_ids.json milestone_state.json daily_stats.json
+          git add posted_ids.json milestone_state.json daily_stats.json live_poll_state.json random_posted_ids.json
           git diff --quiet --cached || git commit -m "Update state files"
           git pull --rebase
           git push
