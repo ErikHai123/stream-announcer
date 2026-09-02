@@ -52,16 +52,25 @@ _MIN_RUN_INTERVAL_SECONDS = 60
 _POSTED_IDS_MAX_AGE_DAYS = 30
 _RANDOM_POSTED_MAX_AGE_DAYS = 90
 
-# Сколько страниц плейлиста загружать для рандома (5 × 50 = 250 видео)
+# Сколько страниц плейлиста загружать для рандома (5 x 50 = 250 видео)
 _MAX_PAGES_FOR_RANDOM = 5
 
 
 # ---------- Статистика за день ----------
 def load_stats():
     if os.path.exists(STATS_FILE):
-        with open(STATS_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {"current_date": "", "posts_today": 0, "errors_today": 0, "report_sent_today": False, "random_sent_today": False}
+        try:
+            with open(STATS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"⚠️ Ошибка чтения stats, создаём заново: {e}", file=sys.stderr)
+    return {
+        "current_date": "",
+        "posts_today": 0,
+        "errors_today": 0,
+        "report_sent_today": False,
+        "random_sent_today": False,
+    }
 
 
 def save_stats(stats):
@@ -78,6 +87,7 @@ def increment_errors(stats):
 
 
 def send_daily_report(stats):
+    """Отправляет отчёт админу. НЕ ловит исключения — пусть всплывает в main()."""
     if not ADMIN_CHAT_ID:
         return
     date_str = datetime.now(zoneinfo.ZoneInfo("Europe/Moscow")).strftime("%d.%m.%Y")
@@ -90,24 +100,24 @@ def send_daily_report(stats):
     elif posts == 0 and errors == 0:
         text += "\n💤 Сегодня тихо, но бот на месте!"
 
-    try:
-        send_telegram_message(ADMIN_CHAT_ID, text)
-        print(f"📤 Отчёт отправлен админу: {posts} постов, {errors} ошибок")
-    except Exception as e:
-        print(f"Не удалось отправить отчёт админу: {e}", file=sys.stderr)
+    send_telegram_message(ADMIN_CHAT_ID, text)
+    print(f"📤 Отчёт отправлен админу: {posts} постов, {errors} ошибок")
 
 
 # ---------- Защита от частых запусков ----------
 def _check_rate_limit():
     if os.path.exists(_RUN_LOCK_FILE):
-        with open(_RUN_LOCK_FILE, "r", encoding="utf-8") as f:
-            try:
+        try:
+            with open(_RUN_LOCK_FILE, "r", encoding="utf-8") as f:
                 last_run = float(f.read().strip())
-                if time.time() - last_run < _MIN_RUN_INTERVAL_SECONDS:
-                    print(f"⏳ Слишком частый запуск. Пропускаем ({int(time.time() - last_run)} сек назад был запуск).")
-                    return False
-            except ValueError:
-                pass
+            if time.time() - last_run < _MIN_RUN_INTERVAL_SECONDS:
+                print(
+                    f"⏳ Слишком частый запуск. Пропускаем "
+                    f"({int(time.time() - last_run)} сек назад был запуск)."
+                )
+                return False
+        except (ValueError, OSError):
+            pass
     with open(_RUN_LOCK_FILE, "w", encoding="utf-8") as f:
         f.write(str(time.time()))
     return True
@@ -116,14 +126,17 @@ def _check_rate_limit():
 # ---------- posted_ids с автоочисткой старых записей ----------
 def load_posted_ids():
     if os.path.exists(STATE_FILE):
-        with open(STATE_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        # Миграция со старого формата (список) на новый (словарь с датами)
-        if isinstance(data, list):
-            today = datetime.now(zoneinfo.ZoneInfo(TIMEZONE)).strftime("%Y-%m-%d")
-            return {vid: today for vid in data}
-        elif isinstance(data, dict):
-            return data
+        try:
+            with open(STATE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            # Миграция со старого формата (список) на новый (словарь с датами)
+            if isinstance(data, list):
+                today = datetime.now(zoneinfo.ZoneInfo(TIMEZONE)).strftime("%Y-%m-%d")
+                return {vid: today for vid in data}
+            elif isinstance(data, dict):
+                return data
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"⚠️ Ошибка чтения posted_ids, создаём заново: {e}", file=sys.stderr)
     return {}
 
 
@@ -155,8 +168,11 @@ def clean_old_posted_ids(posted_ids, days=_POSTED_IDS_MAX_AGE_DAYS):
 # ---------- Рандомные видео (отдельный трекинг) ----------
 def load_random_posted_ids():
     if os.path.exists(RANDOM_POSTED_STATE_FILE):
-        with open(RANDOM_POSTED_STATE_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+        try:
+            with open(RANDOM_POSTED_STATE_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"⚠️ Ошибка чтения random_posted_ids: {e}", file=sys.stderr)
     return {}
 
 
@@ -189,11 +205,11 @@ def get_all_uploads(max_pages=_MAX_PAGES_FOR_RANDOM):
     playlist_id = get_uploads_playlist_id()
     if not playlist_id:
         return []
-    
+
     video_ids = []
     next_page_token = None
     pages = 0
-    
+
     while pages < max_pages:
         params = {
             "part": "snippet",
@@ -203,7 +219,7 @@ def get_all_uploads(max_pages=_MAX_PAGES_FOR_RANDOM):
         }
         if next_page_token:
             params["pageToken"] = next_page_token
-            
+
         try:
             data = http_get_json(
                 "https://www.googleapis.com/youtube/v3/playlistItems",
@@ -212,25 +228,25 @@ def get_all_uploads(max_pages=_MAX_PAGES_FOR_RANDOM):
         except Exception as e:
             print(f"⚠️ Ошибка загрузки страницы uploads: {e}", file=sys.stderr)
             break
-        
+
         for item in data.get("items", []):
             vid = item["snippet"]["resourceId"]["videoId"]
             video_ids.append(vid)
-            
+
         next_page_token = data.get("nextPageToken")
         pages += 1
         if not next_page_token:
             break
-            
+
     return video_ids
 
 
 def get_random_unposted_video(posted_ids, random_posted_ids):
     """Возвращает случайное видео, которое не публиковалось ни как новое, ни как рандомное."""
     all_videos = get_all_uploads()
-    
+
     available = [vid for vid in all_videos if vid not in posted_ids and vid not in random_posted_ids]
-    
+
     if not available:
         return None
     return random.choice(available)
@@ -239,8 +255,11 @@ def get_random_unposted_video(posted_ids, random_posted_ids):
 # ---------- Состояния ----------
 def load_last_milestone():
     if os.path.exists(MILESTONE_STATE_FILE):
-        with open(MILESTONE_STATE_FILE, "r", encoding="utf-8") as f:
-            return json.load(f).get("last_milestone", 0), True
+        try:
+            with open(MILESTONE_STATE_FILE, "r", encoding="utf-8") as f:
+                return json.load(f).get("last_milestone", 0), True
+        except (json.JSONDecodeError, OSError):
+            pass
     return 0, False
 
 
@@ -254,7 +273,7 @@ def http_get_json(url, params, timeout=15):
     query = urllib.parse.urlencode(params)
     full_url = f"{url}?{query}"
     try:
-        req = urllib.request.Request(full_url, method='GET')
+        req = urllib.request.Request(full_url, method="GET")
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
@@ -287,7 +306,7 @@ def find_candidate_videos():
     playlist_id = get_uploads_playlist_id()
     if not playlist_id:
         return []
-    
+
     data = http_get_json(
         "https://www.googleapis.com/youtube/v3/playlistItems",
         {
@@ -364,10 +383,10 @@ def extract_video_id(url):
     if not url or not url.strip():
         return None
     patterns = [
-        r'(?:v=|\/)([0-9A-Za-z_-]{11})',
-        r'(?:embed\/)([0-9A-Za-z_-]{11})',
-        r'(?:youtu\.be\/)([0-9A-Za-z_-]{11})',
-        r'(?:shorts\/)([0-9A-Za-z_-]{11})',
+        r"(?:v=|\/)([0-9A-Za-z_-]{11})",
+        r"(?:embed\/)([0-9A-Za-z_-]{11})",
+        r"(?:youtu\.be\/)([0-9A-Za-z_-]{11})",
+        r"(?:shorts\/)([0-9A-Za-z_-]{11})",
     ]
     for pattern in patterns:
         match = re.search(pattern, url)
@@ -566,7 +585,7 @@ def send_telegram_photo(photo_url, caption, buttons=None):
         print(f"🔗 URL фото: {photo_url}", file=sys.stderr)
         print(f"🔘 Кнопки: {buttons}", file=sys.stderr)
         raise RuntimeError(f"Telegram error {e.code}: {error_body}")
-    
+
     if not result.get("ok"):
         print(f"❌ Telegram API error: {result}", file=sys.stderr)
         raise RuntimeError(f"Telegram error: {result}")
@@ -581,7 +600,8 @@ MILESTONE_TEMPLATES = [
 ]
 
 
-def check_subscriber_milestone():
+def check_subscriber_milestone(stats):
+    """Проверяет milestones и обновляет stats при публикации."""
     try:
         count, channel_title = get_channel_info()
     except Exception as e:
@@ -600,10 +620,13 @@ def check_subscriber_milestone():
         return
 
     if current_milestone > last_milestone and current_milestone > 0:
-        text = random.choice(MILESTONE_TEMPLATES).format(channel=channel_title, count=current_milestone)
+        text = random.choice(MILESTONE_TEMPLATES).format(
+            channel=channel_title, count=current_milestone
+        )
         try:
             result = send_telegram_message(TELEGRAM_CHAT_ID, text)
             print(f"Опубликовано поздравление с {current_milestone} подписчиками")
+            increment_posts(stats)
             try:
                 message_id = result["result"]["message_id"]
                 react_to_message(TELEGRAM_CHAT_ID, message_id, "🎉")
@@ -611,6 +634,7 @@ def check_subscriber_milestone():
                 print(f"Не удалось поставить реакцию: {e}", file=sys.stderr)
         except Exception as e:
             print(f"Ошибка отправки поздравления: {e}", file=sys.stderr)
+            increment_errors(stats)
             return
         save_last_milestone(current_milestone)
 
@@ -642,8 +666,12 @@ def main():
 
     # Отчёт в 23:00 МСК (ловим в диапазоне 23:00–23:59)
     if now.hour == 23 and not stats.get("report_sent_today", False):
-        send_daily_report(stats)
-        stats["report_sent_today"] = True
+        try:
+            send_daily_report(stats)
+            stats["report_sent_today"] = True
+        except Exception as e:
+            print(f"❌ Ошибка отправки отчёта: {e}", file=sys.stderr)
+            increment_errors(stats)
         save_stats(stats)
 
     # --- Защита от частых запусков ---
@@ -658,8 +686,10 @@ def main():
     # --- Рандомное видео дня в 15:00 МСК ---
     if now.hour == 15 and not stats.get("random_sent_today", False):
         random_posted_ids = load_random_posted_ids()
-        random_posted_ids = clean_old_random_posted_ids(random_posted_ids, days=_RANDOM_POSTED_MAX_AGE_DAYS)
-        
+        random_posted_ids = clean_old_random_posted_ids(
+            random_posted_ids, days=_RANDOM_POSTED_MAX_AGE_DAYS
+        )
+
         random_video_id = get_random_unposted_video(posted_ids, random_posted_ids)
         if random_video_id:
             print(f"🎲 Выбрано рандомное видео: {random_video_id}")
@@ -667,18 +697,14 @@ def main():
                 details = get_video_details_batch([random_video_id]).get(random_video_id)
                 if details:
                     snippet = details["snippet"]
-                    content_details = details.get("contentDetails", {})
                     title = snippet["title"]
                     channel_title = snippet["channelTitle"]
                     thumbnail_url = best_thumbnail(snippet["thumbnails"])
-                    
-                    duration_seconds = parse_duration_seconds(content_details.get("duration", ""))
-                    content_type = "shorts" if duration_seconds <= SHORTS_MAX_DURATION_SECONDS else "video"
-                    
+
                     text = generate_announcement_text("random", title, channel_title)
                     video_link = f"https://www.youtube.com/watch?v={random_video_id}"
                     buttons = [{"text": "▶️ YouTube", "url": video_link}]
-                    
+
                     print(f"📤 Попытка отправки рандомного: {title} ({random_video_id})")
                     result = send_telegram_photo(thumbnail_url, text, buttons)
                     print(f"✅ Рандомное видео опубликовано: {title} ({random_video_id})")
@@ -688,19 +714,28 @@ def main():
                         react_to_message(TELEGRAM_CHAT_ID, message_id, "🎲")
                     except Exception as e:
                         print(f"Не удалось поставить реакцию: {e}", file=sys.stderr)
-                    
+
+                    # ФИКС: добавляем в posted_ids, чтобы не задублировать как "новое видео"
+                    posted_ids[random_video_id] = today_str
+                    save_posted_ids(posted_ids)
+
                     random_posted_ids[random_video_id] = today_str
                     save_random_posted_ids(random_posted_ids)
                     stats["random_sent_today"] = True
                 else:
-                    print(f"⚠️ Нет деталей для рандомного видео {random_video_id}", file=sys.stderr)
+                    print(
+                        f"⚠️ Нет деталей для рандомного видео {random_video_id}",
+                        file=sys.stderr,
+                    )
                     increment_errors(stats)
             except Exception as e:
                 print(f"❌ Ошибка отправки рандомного видео: {e}", file=sys.stderr)
                 increment_errors(stats)
         else:
-            print("ℹ️ Нет доступных видео для рандомной публикации (все уже были опубликованы)")
-        
+            print(
+                "ℹ️ Нет доступных видео для рандомной публикации (все уже были опубликованы)"
+            )
+
         save_stats(stats)
 
     # --- Основная логика: новые видео/стримы ---
@@ -729,9 +764,9 @@ def main():
     print(f"🆕 Новых (не в posted_ids): {len(candidates_to_check)}")
 
     if CATCH_UP_ONLY:
-        today_str = datetime.now(zoneinfo.ZoneInfo(TIMEZONE)).strftime("%Y-%m-%d")
+        today_str_main = datetime.now(zoneinfo.ZoneInfo(TIMEZONE)).strftime("%Y-%m-%d")
         for vid in candidates_to_check:
-            posted_ids[vid] = today_str
+            posted_ids[vid] = today_str_main
         save_posted_ids(posted_ids)
         print(
             f"Режим CATCH_UP_ONLY: помечено как уже показанные - "
@@ -751,11 +786,14 @@ def main():
         return
 
     new_posts = 0
-    today_str = datetime.now(zoneinfo.ZoneInfo(TIMEZONE)).strftime("%Y-%m-%d")
-    
+    today_str_main = datetime.now(zoneinfo.ZoneInfo(TIMEZONE)).strftime("%Y-%m-%d")
+
     for video_id in candidates_to_check:
         if new_posts >= MAX_POSTS_PER_RUN:
-            print(f"Достигнут лимит {MAX_POSTS_PER_RUN} постов за запуск, остальное - в следующий раз")
+            print(
+                f"Достигнут лимит {MAX_POSTS_PER_RUN} постов за запуск, "
+                f"остальное - в следующий раз"
+            )
             break
 
         details = details_by_id.get(video_id)
@@ -774,8 +812,12 @@ def main():
         start_time_str = ""
 
         if live_details:
-            is_live = "actualStartTime" in live_details and "actualEndTime" not in live_details
-            is_upcoming = "scheduledStartTime" in live_details and "actualStartTime" not in live_details
+            is_live = (
+                "actualStartTime" in live_details and "actualEndTime" not in live_details
+            )
+            is_upcoming = (
+                "scheduledStartTime" in live_details and "actualStartTime" not in live_details
+            )
 
             if not is_live and not is_upcoming:
                 print(f"⏭️ Пропуск завершённого стрима: {title}")
@@ -786,10 +828,14 @@ def main():
             start_time_str = format_start_time(scheduled_start) if scheduled_start else ""
         else:
             duration_seconds = parse_duration_seconds(content_details.get("duration", ""))
-            content_type = "shorts" if duration_seconds <= SHORTS_MAX_DURATION_SECONDS else "video"
+            content_type = (
+                "shorts" if duration_seconds <= SHORTS_MAX_DURATION_SECONDS else "video"
+            )
 
         try:
-            text = generate_announcement_text(content_type, title, channel_title, start_time_str)
+            text = generate_announcement_text(
+                content_type, title, channel_title, start_time_str
+            )
         except Exception as e:
             print(f"Ошибка генерации текста для {video_id}: {e}", file=sys.stderr)
             increment_errors(stats)
@@ -828,14 +874,17 @@ def main():
             increment_errors(stats)
             continue
 
-        posted_ids[video_id] = today_str
+        # ФИКС: сохраняем posted_ids сразу после каждого поста — защита от дублей при падении
+        posted_ids[video_id] = today_str_main
         new_posts += 1
+        save_posted_ids(posted_ids)
         time.sleep(SECONDS_BETWEEN_POSTS)
 
     save_posted_ids(posted_ids)
     print(f"Готово. Новых постов: {new_posts}")
 
-    check_subscriber_milestone()
+    # ФИКС: milestone тоже учитывается в stats
+    check_subscriber_milestone(stats)
     save_stats(stats)
 
 
