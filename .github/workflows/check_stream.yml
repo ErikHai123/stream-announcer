@@ -50,6 +50,8 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          [ -f live_poll_state.json ] || echo '{}' > live_poll_state.json
+          [ -f random_posted_ids.json ] || echo '{}' > random_posted_ids.json
           git add posted_ids.json milestone_state.json daily_stats.json live_poll_state.json random_posted_ids.json
           git diff --quiet --cached || git commit -m "Update state files"
           git pull --rebase
