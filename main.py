@@ -711,7 +711,7 @@ def main():
                     increment_posts(stats)
                     try:
                         message_id = result["result"]["message_id"]
-                        react_to_message(TELEGRAM_CHAT_ID, message_id, "🎲")
+                        react_to_message(TELEGRAM_CHAT_ID, message_id, "❤️")
                     except Exception as e:
                         print(f"Не удалось поставить реакцию: {e}", file=sys.stderr)
 
