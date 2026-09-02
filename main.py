@@ -1,6 +1,5 @@
 """
 Stream Announcer Bot + Live Polls
-----------------------------------
 """
 
 import os, json, random, sys, urllib.request, urllib.parse, urllib.error, re, time
