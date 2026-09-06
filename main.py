@@ -1,5 +1,5 @@
 """
-Stream Announcer Bot + Live Polls
+Stream Announcer Bot + Live Polls (fixed for upcoming)
 """
 
 import os, json, random, sys, urllib.request, urllib.parse, urllib.error, re, time
@@ -636,6 +636,7 @@ def main():
         chtitle = snip["channelTitle"]
         thumb = best_thumbnail(snip["thumbnails"])
         start_str = ""
+        scheduled_start_raw = None
 
         if live:
             is_live = "actualStartTime" in live and "actualEndTime" not in live
@@ -644,6 +645,7 @@ def main():
                 print(f"⏭️ Пропуск завершённого: {title}"); continue
             ctype = "live" if is_live else "upcoming"
             ss = live.get("scheduledStartTime")
+            scheduled_start_raw = ss
             start_str = format_start_time(ss) if ss else ""
         else:
             ds = parse_duration_seconds(cd.get("duration",""))
@@ -673,7 +675,8 @@ def main():
             except Exception as e:
                 print(f"Реакция: {e}", file=sys.stderr)
 
-            if ctype == "live":
+            # ФИКС: добавляем и upcoming, и live в очередь опроса
+            if ctype in ("live", "upcoming"):
                 if video_id not in live_poll_state:
                     live_poll_state[video_id] = {
                         "announced_at": datetime.now(timezone.utc).isoformat(),
@@ -681,7 +684,10 @@ def main():
                         "poll_message_id": None,
                         "title": title,
                     }
-                    print(f"📝 LIVE {video_id} добавлен в очередь опроса")
+                    # Для upcoming сохраняем scheduled_start — от него считаем 5 минут
+                    if ctype == "upcoming" and scheduled_start_raw:
+                        live_poll_state[video_id]["scheduled_start"] = scheduled_start_raw
+                    print(f"📝 {ctype.upper()} {video_id} добавлен в очередь опроса")
         except Exception as e:
             print(f"❌ Ошибка Telegram {video_id}: {e}", file=sys.stderr)
             increment_errors(stats); continue
@@ -694,15 +700,22 @@ def main():
     save_posted_ids(posted_ids)
     print(f"Готово. Новых: {new_posts}")
 
-    # --- Send delayed polls (5 min after announce) ---
+    # --- Send delayed polls ---
     now_utc = datetime.now(timezone.utc)
     for vid, st in list(live_poll_state.items()):
         if st.get("poll_sent"): continue
+
+        # ФИКС: для upcoming считаем от scheduled_start, для live — от announced_at
         try:
-            announced = datetime.fromisoformat(st["announced_at"])
-            elapsed = (now_utc - announced).total_seconds()
+            if st.get("scheduled_start"):
+                start_dt = datetime.fromisoformat(st["scheduled_start"].replace("Z", "+00:00"))
+                elapsed = (now_utc - start_dt).total_seconds()
+            else:
+                start_dt = datetime.fromisoformat(st["announced_at"])
+                elapsed = (now_utc - start_dt).total_seconds()
         except (ValueError, TypeError):
             continue
+
         if elapsed >= _POLL_DELAY_SECONDS:
             poll_cfg = detect_game_for_poll(st.get("title",""))
             if poll_cfg:
