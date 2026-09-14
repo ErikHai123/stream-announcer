@@ -247,105 +247,330 @@ def extract_video_id(url):
         if m: return m.group(1)
     return None
 
-# ---------- Emojis ----------
-GAME_EMOJIS = [
-    ("gta","🚗"),("гта","🚗"),("farcry","🔫"),("far cry","🔫"),("cyberpunk","🤖"),
-    ("cs2","🔫"),("csgo","🔫"),("cs 1.6","🔫"),("counter-strike","🔫"),
-    ("minecraft","⛏️"),("майнкрафт","⛏️"),("f1","🏎️"),("formula","🏎️"),("fifa","⚽"),
-    ("repo","🤖"),("battlefield","💣"),("valorant","🔫"),("dota","⚔️"),("fortnite","🔫"),
-    ("warzone","🔫"),("elden ring","⚔️"),("stalker","☢️"),("roblox","🧱"),("apex","🔫"),
-    ("overwatch","🔫"),("wow","⚔️"),("world of warcraft","⚔️"),("rocket league","⚽"),
-    ("fall guys","🎮"),("among us","🎮"),
-]
+# ---------- Игры: единая база (название, эмодзи, варианты написания, опрос) ----------
+GAMES = {
+    "gta5": {
+        "name": "GTA 5", "emoji": "🚗",
+        "aliases": ["gta online", "гта онлайн", "gta v", "gta5", "gta 5", "гташка", "гта5", "гта 5", "гта"],
+        "poll_question": "🚗 Какие карты сегодня будем проходить?",
+        "poll_options": ["Паркуры", "Скилл-тесты", "Ларги", "Стенки", "Спуски", "Дрифт-трассы", "Паркур-лолы"],
+    },
+    "gta6": {
+        "name": "GTA 6", "emoji": "🚔",
+        "aliases": ["gta vi", "gta6", "gta 6", "гташка 6", "гта6", "гта 6"],
+        "poll_question": "🚔 Что смотрим в GTA 6 сегодня?",
+        "poll_options": ["Сюжетка", "Открытый мир", "Мультиплеер", "Просто ролик", "Обзор"],
+    },
+    "cs": {
+        "name": "CS2", "emoji": "🔫",
+        "aliases": ["counter-strike 2", "counter strike 2", "counter-strike", "counter strike",
+                    "cs 1.6", "кс 1.6", "cs go", "csgo", "cs2", "кс го", "ксго", "кс2", "кс 2",
+                    "контр-страйк", "контрстрайк", "контра"],
+        "poll_question": "🔫 Какой режим сегодня ждёте?",
+        "poll_options": ["ММ (соло)", "FaceIt", "Кастомки", "Зомби-мод", "1v1 Арена", "Эскалация"],
+    },
+    "minecraft": {
+        "name": "Minecraft", "emoji": "⛏️",
+        "aliases": ["minecraft", "майнкрафте", "майнкрафтом", "майнкрафт"],
+        "poll_question": "⛏️ Что строим/делаем сегодня?",
+        "poll_options": ["Хардкор выживание", "Паркур карта", "ПвП арена", "Авто-ферма", "Бедварс", "Скайблок"],
+    },
+    "valorant": {
+        "name": "Valorant", "emoji": "🔫",
+        "aliases": ["valorant", "валорант"],
+        "poll_question": "🔫 Какой агент/режим в Valorant?",
+        "poll_options": ["Рейтинг", "Связка", "Дезматч", "Эскалация", "Кастомки"],
+    },
+    "dota": {
+        "name": "Dota 2", "emoji": "⚔️",
+        "aliases": ["dota 2", "dota2", "dota", "дота 2", "дота2", "дотка", "дотой", "дота"],
+        "poll_question": "⚔️ Какая роль сегодня в Dota?",
+        "poll_options": ["Керри", "Мид", "Оффлейн", "Саппорт 4", "Саппорт 5", "Все рандом"],
+    },
+    "lol": {
+        "name": "League of Legends", "emoji": "⚔️",
+        "aliases": ["league of legends", "лига легенд"],
+        "poll_question": "⚔️ Какая роль сегодня в LoL?",
+        "poll_options": ["Топ", "Лес", "Мид", "АДК", "Саппорт", "Все рандом"],
+    },
+    "fortnite": {
+        "name": "Fortnite", "emoji": "🔫",
+        "aliases": ["fortnite", "фортнайта", "фортнайт", "форт найт"],
+        "poll_question": "🔫 Что играем в Fortnite?",
+        "poll_options": ["Рояль", "Творческий", "ЗБС", "Ранкед", "Кастомки"],
+    },
+    "pubg": {
+        "name": "PUBG", "emoji": "🔫",
+        "aliases": ["pubg", "пабг", "пубг"],
+        "poll_question": "🔫 Какой режим PUBG сегодня?",
+        "poll_options": ["Соло", "Дуо", "Сквад", "Классик", "Ranked"],
+    },
+    "apex": {
+        "name": "Apex Legends", "emoji": "🔫",
+        "aliases": ["apex legends", "apex", "апекс легендс", "апекс"],
+        "poll_question": "🔫 Какой режим Apex сегодня?",
+        "poll_options": ["Баттл-ройал", "Арена", "Ранкед", "ЛТМ", "Трио"],
+    },
+    "warzone": {
+        "name": "Call of Duty: Warzone", "emoji": "🔫",
+        "aliases": ["call of duty", "warzone", "варзона", "варзон", "колда", "колду"],
+        "poll_question": "🔫 Какой режим Warzone?",
+        "poll_options": ["Большая карта", "Решта", "Ранкед", "Соло", "Отряд"],
+    },
+    "rust": {
+        "name": "Rust", "emoji": "🪓",
+        "aliases": ["rust", "раст"],
+        "poll_question": "🪓 Что сегодня в Rust?",
+        "poll_options": ["Рейд", "Фарм ресурсов", "Строительство базы", "PvP", "Вайп"],
+    },
+    "roblox": {
+        "name": "Roblox", "emoji": "🧱",
+        "aliases": ["roblox", "роблокс"],
+        "poll_question": "🧱 Какая игра в Roblox сегодня?",
+        "poll_options": ["Doors", "Tower of Hell", "Brookhaven", "BedWars", "Мини-игры"],
+    },
+    "wow": {
+        "name": "World of Warcraft", "emoji": "⚔️",
+        "aliases": ["world of warcraft", "ворлд оф варкрафт", "вов", "wow"],
+        "poll_question": "⚔️ Что сегодня в WoW?",
+        "poll_options": ["Подземелья", "Рейд", "PvP", "Прокачка", "Торговля"],
+    },
+    "wot": {
+        "name": "World of Tanks", "emoji": "🎯",
+        "aliases": ["world of tanks", "ворлд оф танкс", "танки", "wot"],
+        "poll_question": "🎯 Какой режим World of Tanks?",
+        "poll_options": ["Случайный бой", "Ранговый", "Клановый", "Исторический", "Песочница"],
+    },
+    "standoff2": {
+        "name": "Standoff 2", "emoji": "🔫",
+        "aliases": ["standoff 2", "standoff2", "стендофф", "стандофф"],
+        "poll_question": "🔫 Какой режим Standoff 2?",
+        "poll_options": ["Классика", "Дефматч", "Ранкед", "Кастомки"],
+    },
+    "genshin": {
+        "name": "Genshin Impact", "emoji": "🌸",
+        "aliases": ["genshin impact", "genshin", "геншин импакт", "геншин"],
+        "poll_question": "🌸 Что делаем в Genshin сегодня?",
+        "poll_options": ["Данжи", "Фарм артефактов", "Ивент", "Спиральная бездна", "Прокачка"],
+    },
+    "brawlstars": {
+        "name": "Brawl Stars", "emoji": "💥",
+        "aliases": ["brawl stars", "бравлстарс", "бравл старс"],
+        "poll_question": "💥 Какой режим Brawl Stars?",
+        "poll_options": ["Кубок трофеев", "Осада", "Нокаут", "Захват", "Ганк"],
+    },
+    "amongus": {
+        "name": "Among Us", "emoji": "🎮",
+        "aliases": ["among us", "амонгас", "амонг ас"],
+        "poll_question": "🎮 Какая карта Among Us сегодня?",
+        "poll_options": ["The Skeld", "MIRA HQ", "Polus", "Airship", "Fungle"],
+    },
+    "fallguys": {
+        "name": "Fall Guys", "emoji": "🎮",
+        "aliases": ["fall guys", "фолгайс", "фолл гайс"],
+        "poll_question": "🎮 Какой раунд Fall Guys ждёте?",
+        "poll_options": ["Захват короны", "Командные", "Выживание", "Гонки", "Финал"],
+    },
+    "eldenring": {
+        "name": "Elden Ring", "emoji": "⚔️",
+        "aliases": ["elden ring", "элден ринг"],
+        "poll_question": "⚔️ Что сегодня в Elden Ring?",
+        "poll_options": ["Боссы", "ПвП арена", "НГ+", "Кооп", "Исследование"],
+    },
+    "tarkov": {
+        "name": "Escape from Tarkov", "emoji": "☠️",
+        "aliases": ["escape from tarkov", "тарков"],
+        "poll_question": "☠️ Какой рейд в Tarkov сегодня?",
+        "poll_options": ["Таможня", "Резерв", "Берег", "Завод", "Рейд без страховки"],
+    },
+    "rocketleague": {
+        "name": "Rocket League", "emoji": "⚽",
+        "aliases": ["rocket league", "рокетлига", "рокет лига"],
+        "poll_question": "⚽ Какой режим Rocket League?",
+        "poll_options": ["1v1", "2v2", "3v3", "Хоккей", "Румбл", "Дропшот"],
+    },
+    "battlefield": {
+        "name": "Battlefield", "emoji": "💣",
+        "aliases": ["battlefield", "батлфилд", "батл филд"],
+        "poll_question": "💣 Какой режим Battlefield сегодня?",
+        "poll_options": ["Захват", "Прорыв", "Штурм", "Техника", "Снайпер only"],
+    },
+    "overwatch": {
+        "name": "Overwatch", "emoji": "🔫",
+        "aliases": ["overwatch", "овервотче", "овервотч"],
+        "poll_question": "🔫 Какой режим Overwatch?",
+        "poll_options": ["Рейтинг", "Быстрая игра", "Аркада", "Кастомки", "Пуш"],
+    },
+    "fifa": {
+        "name": "FIFA / EA FC", "emoji": "⚽",
+        "aliases": ["ea fc", "fifa", "фифа", "еа фс"],
+        "poll_question": "⚽ Какой режим FIFA сегодня?",
+        "poll_options": ["FUT Champions", "Карьера", "Pro Clubs", "Volta", "Драфт"],
+    },
+    "f1": {
+        "name": "Formula 1", "emoji": "🏎️",
+        "aliases": ["formula 1", "формула 1", "формула", "f1"],
+        "poll_question": "🏎️ Какой формат гонки сегодня?",
+        "poll_options": ["Гранд-При (50%)", "Гранд-При (100%)", "Спринт", "Квалификация", "Мультиплеер"],
+    },
+    "farcry": {
+        "name": "Far Cry", "emoji": "🔫",
+        "aliases": ["far cry", "фар край", "farcry"],
+        "poll_question": "🔫 Что сегодня в Far Cry?",
+        "poll_options": ["Сюжет", "Аванпосты", "Охота", "Кооп", "Экспедиции"],
+    },
+    "cyberpunk": {
+        "name": "Cyberpunk 2077", "emoji": "🤖",
+        "aliases": ["cyberpunk 2077", "cyberpunk", "киберпанк 2077", "киберпанк"],
+        "poll_question": "🤖 Что сегодня в Cyberpunk?",
+        "poll_options": ["Сюжетка", "Рандомные квесты", "Полиция vs Гангстеры", "Фотомод", "Боссы"],
+    },
+    "stalker2": {
+        "name": "S.T.A.L.K.E.R. 2", "emoji": "☢️",
+        "aliases": ["stalker 2", "сталкер 2", "stalker", "сталк", "сталкер"],
+        "poll_question": "☢️ Какая зона сегодня в Stalker?",
+        "poll_options": ["Кордон", "Бар", "Припять", "ЧАЭС", "Подземелья", "Аномалии"],
+    },
+    "atomicheart": {
+        "name": "Atomic Heart", "emoji": "⚛️",
+        "aliases": ["atomic heart", "атомик харт", "атомик"],
+        "poll_question": "⚛️ Что сегодня в Atomic Heart?",
+        "poll_options": ["Сюжет", "Побочки", "Боссы", "Исследование Р.У.Р."],
+    },
+    "residentevil": {
+        "name": "Resident Evil", "emoji": "🧟",
+        "aliases": ["resident evil requiem", "resident evil", "резидент ивел", "резидент эвил"],
+        "poll_question": "🧟 Что сегодня в Resident Evil?",
+        "poll_options": ["Сюжет", "Боссы", "Хоррор на максимум", "Спидран", "Совместное прохождение"],
+    },
+    "blackmyth": {
+        "name": "Black Myth: Wukong", "emoji": "🐒",
+        "aliases": ["black myth wukong", "black myth", "чёрный миф", "вуконг"],
+        "poll_question": "🐒 Что сегодня в Black Myth: Wukong?",
+        "poll_options": ["Боссы", "Сюжет", "Исследование", "Фарм снаряги"],
+    },
+    "marvelrivals": {
+        "name": "Marvel Rivals", "emoji": "🦸",
+        "aliases": ["marvel rivals", "марвел райвелс", "марвел"],
+        "poll_question": "🦸 Какой режим Marvel Rivals?",
+        "poll_options": ["Быстрая игра", "Ранкед", "Кастомки", "Соревновательный"],
+    },
+    "palworld": {
+        "name": "Palworld", "emoji": "🐾",
+        "aliases": ["palworld", "пэлворлд", "палворлд"],
+        "poll_question": "🐾 Что делаем в Palworld?",
+        "poll_options": ["Ловим палов", "Строим базу", "Босс-рейд", "PvP арена"],
+    },
+    "bg3": {
+        "name": "Baldur's Gate 3", "emoji": "⚔️",
+        "aliases": ["baldur's gate 3", "baldurs gate 3", "балдурс гейт", "бг3"],
+        "poll_question": "⚔️ Что сегодня в Baldur's Gate 3?",
+        "poll_options": ["Сюжет", "Компания", "Исследование", "Боссы", "Романтическая линия"],
+    },
+    "helldivers": {
+        "name": "Helldivers 2", "emoji": "🪖",
+        "aliases": ["helldivers 2", "helldivers", "хелдайверс"],
+        "poll_question": "🪖 Какая миссия в Helldivers 2?",
+        "poll_options": ["Истребление", "Эвакуация", "Высокая сложность", "Кооп на 4"],
+    },
+    "crimsondesert": {
+        "name": "Crimson Desert", "emoji": "🗡️",
+        "aliases": ["crimson desert", "кримсон дезерт"],
+        "poll_question": "🗡️ Что сегодня в Crimson Desert?",
+        "poll_options": ["Сюжет", "Открытый мир", "Боссы", "Исследование"],
+    },
+    "subnautica": {
+        "name": "Subnautica", "emoji": "🌊",
+        "aliases": ["subnautica 2", "subnautica", "субнотика", "субнавтика"],
+        "poll_question": "🌊 Что делаем в Subnautica?",
+        "poll_options": ["Исследование глубин", "Строительство базы", "Крафт", "Выживание", "Встреча с боссом"],
+    },
+    "warface": {
+        "name": "Warface", "emoji": "🔫",
+        "aliases": ["warface", "варфейс"],
+        "poll_question": "🔫 Какой режим Warface?",
+        "poll_options": ["PvE", "PvP", "Рейд", "Штурм", "Кастомки"],
+    },
+    "mortalkombat": {
+        "name": "Mortal Kombat", "emoji": "🥊",
+        "aliases": ["mortal kombat", "мортал комбат"],
+        "poll_question": "🥊 Что сегодня в Mortal Kombat?",
+        "poll_options": ["Сюжет", "Онлайн бои", "Башни", "Фаталити-сессия"],
+    },
+    "ittakestwo": {
+        "name": "It Takes Two", "emoji": "🤝",
+        "aliases": ["it takes two", "ит тейкс ту"],
+        "poll_question": "🤝 Как проходим It Takes Two?",
+        "poll_options": ["По сюжету", "На 100%", "Соревновательные мини-игры"],
+    },
+    "lethalcompany": {
+        "name": "Lethal Company", "emoji": "👻",
+        "aliases": ["lethal company", "летальная компания", "летал компани"],
+        "poll_question": "👻 Какая планета в Lethal Company сегодня?",
+        "poll_options": ["Лёгкая", "Средняя", "Опасная", "Экстрим", "На выживание"],
+    },
+    "contentwarning": {
+        "name": "Content Warning", "emoji": "📹",
+        "aliases": ["content warning", "контент ворнинг"],
+        "poll_question": "📹 Что снимаем в Content Warning?",
+        "poll_options": ["Хоррор-контент", "Смешные моменты", "Опасные вылазки"],
+    },
+    "phasmophobia": {
+        "name": "Phasmophobia", "emoji": "👻",
+        "aliases": ["phasmophobia", "фазмофобия"],
+        "poll_question": "👻 Какая карта в Phasmophobia?",
+        "poll_options": ["Дом", "Психушка", "Школа", "Высокая сложность", "Профессионал"],
+    },
+    "splitfiction": {
+        "name": "Split Fiction", "emoji": "📖",
+        "aliases": ["split fiction", "сплит фикшн"],
+        "poll_question": "📖 Как проходим Split Fiction?",
+        "poll_options": ["По сюжету", "Кооп-испытания", "На 100%"],
+    },
+    "peak": {
+        "name": "PEAK", "emoji": "🏔️",
+        "aliases": ["peak"],
+        "poll_question": "🏔️ Как штурмуем PEAK сегодня?",
+        "poll_options": ["Кооп восхождение", "Соло забег", "Спидран", "Хардкор без потерь"],
+    },
+    "repo": {
+        "name": "R.E.P.O.", "emoji": "🤖",
+        "aliases": ["r.e.p.o.", "репо", "repo"],
+        "poll_question": "🤖 Какой уровень сложности в R.E.P.O.?",
+        "poll_options": ["Лёгкий", "Средний", "Сложный", "Кошмар", "Соло-челлендж"],
+    },
+}
+
+# Плоский список (алиас, ключ_игры), отсортированный от длинных алиасов к коротким —
+# так "гта 6" распознаётся раньше короткого "гта", и более специфичные варианты
+# (например "cs 1.6") не перебиваются общими ("cs").
+_GAME_ALIASES_SORTED = sorted(
+    ((alias, key) for key, g in GAMES.items() for alias in g["aliases"]),
+    key=lambda pair: len(pair[0]),
+    reverse=True,
+)
+
 DEFAULT_THEME_EMOJI = "🔴"
 
-def detect_theme_emoji(title):
+def match_game(title):
     lowered = title.lower()
-    for kw, em in GAME_EMOJIS:
-        if kw in lowered: return em
-    return DEFAULT_THEME_EMOJI
-
-GAME_DISPLAY_NAMES = {
-    "gta":"GTA", "гта":"GTA", "farcry":"Far Cry", "far cry":"Far Cry", "cyberpunk":"Cyberpunk",
-    "cs2":"CS2", "csgo":"CS:GO", "cs 1.6":"CS 1.6", "counter-strike":"Counter-Strike",
-    "minecraft":"Minecraft", "майнкрафт":"Minecraft", "f1":"F1", "formula":"Formula 1", "fifa":"FIFA",
-    "repo":"Repo", "battlefield":"Battlefield", "valorant":"Valorant", "dota":"Dota", "fortnite":"Fortnite",
-    "warzone":"Warzone", "elden ring":"Elden Ring", "stalker":"Stalker", "roblox":"Roblox", "apex":"Apex",
-    "overwatch":"Overwatch", "wow":"WoW", "world of warcraft":"World of Warcraft", "rocket league":"Rocket League",
-    "fall guys":"Fall Guys", "among us":"Among Us",
-}
-
-def detect_game_name(title):
-    lowered = title.lower()
-    for kw, name in GAME_DISPLAY_NAMES.items():
-        if kw in lowered: return name
+    for alias, key in _GAME_ALIASES_SORTED:
+        if alias in lowered:
+            return GAMES[key]
     return None
 
-# ---------- Poll config ----------
-GAME_POLL_CONFIG = {
-    "gta": {"question":"🚗 Какие карты сегодня будем проходить?",
-            "options":["Паркуры","Скилл-тесты","Ларги","Стенки","Спуски","Дрифт-трассы","Паркур-лолы"]},
-    "гта": {"question":"🚗 Какие карты сегодня будем проходить?",
-            "options":["Паркуры","Скилл-тесты","Ларги","Стенки","Спуски","Дрифт-трассы","Паркур-лолы"]},
-    "cs2": {"question":"🔫 Какой режим сегодня ждёте?",
-            "options":["ММ (соло)","FaceIt","Кастомки","Зомби-мод","1v1 Арена","Эскалация"]},
-    "csgo": {"question":"🔫 Какой режим сегодня ждёте?",
-             "options":["ММ (соло)","FaceIt","Кастомки","Зомби-мод","1v1 Арена","Эскалация"]},
-    "minecraft": {"question":"⛏️ Что строим/делаем сегодня?",
-                  "options":["Хардкор выживание","Паркур карта","ПвП арена","Авто-ферма","Бедварс","Скайблок"]},
-    "майнкрафт": {"question":"⛏️ Что строим/делаем сегодня?",
-                  "options":["Хардкор выживание","Паркур карта","ПвП арена","Авто-ферма","Бедварс","Скайблок"]},
-    "fifa": {"question":"⚽ Какой режим FIFA сегодня?",
-             "options":["FUT Champions","Карьера","Pro Clubs","Volta","Драфт"]},
-    "f1": {"question":"🏎️ Какой формат гонки сегодня?",
-           "options":["Гранд-При (50%)","Гранд-При (100%)","Спринт","Квалификация","Мультиплеер"]},
-    "formula": {"question":"🏎️ Какой формат гонки сегодня?",
-                "options":["Гранд-При (50%)","Гранд-При (100%)","Спринт","Квалификация","Мультиплеер"]},
-    "cyberpunk": {"question":"🤖 Что сегодня в Cyberpunk?",
-                  "options":["Сюжетка","Рандомные квесты","Полиция vs Гангстеры","Фотомод","Боссы"]},
-    "repo": {"question":"🤖 Какой уровень сложности в Repo?",
-             "options":["Лёгкий","Средний","Сложный","Кошмар","Соло-челлендж"]},
-    "battlefield": {"question":"💣 Какой режим Battlefield сегодня?",
-                    "options":["Захват","Прорыв","Штурм","Техника","Снайпер only"]},
-    "valorant": {"question":"🔫 Какой агент/режим в Valorant?",
-                 "options":["Рейтинг","Связка","Дезматч","Эскалация","Кастомки"]},
-    "dota": {"question":"⚔️ Какая роль сегодня в Dota?",
-             "options":["Керри","Мид","Оффлейн","Саппорт 4","Саппорт 5","Все рандом"]},
-    "fortnite": {"question":"🔫 Что играем в Fortnite?",
-                 "options":["Рояль","Творческий","ЗБС","Ранкед","Кастомки"]},
-    "warzone": {"question":"🔫 Какой режим Warzone?",
-                "options":["Большая карта","Решта","Ранкед","Соло","Отряд"]},
-    "elden ring": {"question":"⚔️ Что сегодня в Elden Ring?",
-                   "options":["Боссы","ПвП арена","НГ+","Кооп","Исследование"]},
-    "stalker": {"question":"☢️ Какая зона сегодня в Stalker?",
-                "options":["Кордон","Бар","Припять","ЧАЭС","Подземелья","Аномалии"]},
-    "roblox": {"question":"🧱 Какая игра в Roblox сегодня?",
-               "options":["Doors","Tower of Hell","Brookhaven","BedWars","Мини-игры"]},
-    "apex": {"question":"🔫 Какой режим Apex сегодня?",
-             "options":["Баттл-ройал","Арена","Ранкед","ЛТМ","Трио"]},
-    "overwatch": {"question":"🔫 Какой режим Overwatch?",
-                  "options":["Рейтинг","Быстрая игра","Аркада","Кастомки","Пуш"]},
-    "wow": {"question":"⚔️ Что сегодня в WoW?",
-            "options":["Подземелья","Рейд","PvP","Прокачка","Торговля"]},
-    "world of warcraft": {"question":"⚔️ Что сегодня в WoW?",
-                          "options":["Подземелья","Рейд","PvP","Прокачка","Торговля"]},
-    "rocket league": {"question":"⚽ Какой режим Rocket League?",
-                      "options":["1v1","2v2","3v3","Хоккей","Румбл","Дропшот"]},
-    "fall guys": {"question":"🎮 Какой раунд Fall Guys ждёте?",
-                  "options":["Захват короны","Командные","Выживание","Гонки","Финал"]},
-    "among us": {"question":"🎮 Какая карта Among Us сегодня?",
-                 "options":["The Skeld","MIRA HQ","Polus","Airship","Fungle"]},
-    "farcry": {"question":"🔫 Что сегодня в Far Cry?",
-               "options":["Сюжет","Аванпосты","Охота","Кооп","Экспедиции"]},
-    "far cry": {"question":"🔫 Что сегодня в Far Cry?",
-                "options":["Сюжет","Аванпосты","Охота","Кооп","Экспедиции"]},
-}
+def detect_theme_emoji(title):
+    game = match_game(title)
+    return game["emoji"] if game else DEFAULT_THEME_EMOJI
+
+def detect_game_name(title):
+    game = match_game(title)
+    return game["name"] if game else None
 
 def detect_game_for_poll(title):
-    lowered = title.lower()
-    for keyword, config in GAME_POLL_CONFIG.items():
-        if keyword in lowered:
-            return config
+    game = match_game(title)
+    if game:
+        return {"question": game["poll_question"], "options": game["poll_options"]}
     return None
 
 # ---------- Templates ----------
