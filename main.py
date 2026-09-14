@@ -34,7 +34,7 @@ _RUN_LOCK_FILE = os.path.join(os.path.dirname(__file__), ".last_run")
 _MIN_RUN_INTERVAL_SECONDS = 60
 _POLL_DELAY_SECONDS       = 300
 
-_POSTED_IDS_MAX_AGE_DAYS  = 30
+_POSTED_IDS_MAX_COUNT     = 1000
 _RANDOM_POSTED_MAX_AGE_DAYS = 90
 _MAX_PAGES_FOR_RANDOM     = 5
 
@@ -100,17 +100,25 @@ def save_posted_ids(ids_dict):
     with open(STATE_FILE, "w", encoding="utf-8") as f:
         json.dump(ids_dict, f, ensure_ascii=False, indent=2)
 
-def clean_old_posted_ids(posted_ids, days=_POSTED_IDS_MAX_AGE_DAYS):
+def clean_old_posted_ids(posted_ids, max_count=_POSTED_IDS_MAX_COUNT):
     if not posted_ids: return posted_ids
-    today = datetime.now(zoneinfo.ZoneInfo(TIMEZONE)).date()
-    to_remove = []
-    for vid, date_str in list(posted_ids.items()):
+    # Убираем записи с некорректной/повреждённой датой
+    invalid, valid_items = [], []
+    for vid, date_str in posted_ids.items():
         try:
             post_date = datetime.strptime(date_str, "%Y-%m-%d").date()
-            if (today - post_date).days > days: to_remove.append(vid)
-        except (ValueError, TypeError): to_remove.append(vid)
-    for vid in to_remove: del posted_ids[vid]
-    if to_remove: print(f"🧹 Очищено старых ID: {len(to_remove)}")
+            valid_items.append((vid, post_date))
+        except (ValueError, TypeError):
+            invalid.append(vid)
+    for vid in invalid: del posted_ids[vid]
+    # Держим не больше max_count записей — лишние (самые старые) удаляем
+    if len(valid_items) > max_count:
+        valid_items.sort(key=lambda x: x[1])  # старые первыми
+        to_remove = [vid for vid, _ in valid_items[: len(valid_items) - max_count]]
+        for vid in to_remove: del posted_ids[vid]
+        print(f"🧹 Очищено старых ID (лимит {max_count}): {len(to_remove)}")
+    if invalid:
+        print(f"🧹 Удалено ID с некорректной датой: {len(invalid)}")
     return posted_ids
 
 # ---------- Random posted ----------
@@ -524,6 +532,18 @@ SECONDS_BETWEEN_POSTS = 3
 CATCH_UP_ONLY = os.environ.get("CATCH_UP_ONLY","false").lower() == "true"
 FORCE_VIDEO_URL = os.environ.get("FORCE_VIDEO_URL","")
 
+QUIET_HOURS_START = int(os.environ.get("QUIET_HOURS_START", "0"))  # 00:00
+QUIET_HOURS_END = int(os.environ.get("QUIET_HOURS_END", "6"))      # 06:00
+
+def in_quiet_hours(now_local):
+    """Тихие часы (например 0–6 МСК). Поддерживает и интервалы через полночь."""
+    if QUIET_HOURS_START == QUIET_HOURS_END:
+        return False  # отключено
+    h = now_local.hour
+    if QUIET_HOURS_START < QUIET_HOURS_END:
+        return QUIET_HOURS_START <= h < QUIET_HOURS_END
+    return h >= QUIET_HOURS_START or h < QUIET_HOURS_END
+
 def main():
     stats = load_stats()
     now = datetime.now(zoneinfo.ZoneInfo("Europe/Moscow"))
@@ -543,6 +563,10 @@ def main():
         save_stats(stats)
 
     if not _check_rate_limit():
+        save_stats(stats); return
+
+    if in_quiet_hours(now) and not FORCE_VIDEO_URL and not CATCH_UP_ONLY:
+        print(f"🌙 Тихие часы ({QUIET_HOURS_START:02d}:00–{QUIET_HOURS_END:02d}:00 МСК), пропускаем публикацию.")
         save_stats(stats); return
 
     posted_ids = load_posted_ids()
