@@ -471,7 +471,7 @@ def send_telegram_poll(chat_id, question, options, allows_multiple=True):
         "chat_id": chat_id,
         "question": question,
         "options": json.dumps(options),
-        "is_anonymous": "false",
+        "is_anonymous": "true",
         "allows_multiple_answers": "true" if allows_multiple else "false",
     }).encode("utf-8")
     req = urllib.request.Request(
