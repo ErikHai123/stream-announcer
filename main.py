@@ -28,11 +28,9 @@ STATE_FILE       = os.path.join(os.path.dirname(__file__), "posted_ids.json")
 MILESTONE_FILE   = os.path.join(os.path.dirname(__file__), "milestone_state.json")
 STATS_FILE       = os.path.join(os.path.dirname(__file__), "daily_stats.json")
 RANDOM_FILE      = os.path.join(os.path.dirname(__file__), "random_posted_ids.json")
-LIVE_POLL_FILE   = os.path.join(os.path.dirname(__file__), "live_poll_state.json")
 
 _RUN_LOCK_FILE = os.path.join(os.path.dirname(__file__), ".last_run")
 _MIN_RUN_INTERVAL_SECONDS = 60
-_POLL_DELAY_SECONDS       = 300
 
 _POSTED_IDS_MAX_COUNT     = 1000
 _RANDOM_POSTED_MAX_AGE_DAYS = 90
@@ -166,32 +164,6 @@ def get_random_unposted_video(posted_ids, random_posted_ids):
     all_videos = get_all_uploads()
     available = [vid for vid in all_videos if vid not in posted_ids and vid not in random_posted_ids]
     return random.choice(available) if available else None
-
-# ---------- Live poll state ----------
-def load_live_poll_state():
-    if os.path.exists(LIVE_POLL_FILE):
-        try:
-            with open(LIVE_POLL_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except (json.JSONDecodeError, OSError): pass
-    return {}
-
-def save_live_poll_state(state):
-    with open(LIVE_POLL_FILE, "w", encoding="utf-8") as f:
-        json.dump(state, f, ensure_ascii=False, indent=2)
-
-def clean_live_poll_state(state):
-    if not state: return state
-    now = datetime.now(timezone.utc)
-    to_remove = []
-    for vid, data in list(state.items()):
-        try:
-            announced = datetime.fromisoformat(data.get("announced_at",""))
-            if (now - announced).total_seconds() > 43200: to_remove.append(vid)
-        except (ValueError, TypeError): to_remove.append(vid)
-    for vid in to_remove: del state[vid]
-    if to_remove: print(f"🧹 Очищено старых live-poll: {len(to_remove)}")
-    return state
 
 # ---------- Milestone ----------
 def load_last_milestone():
@@ -693,8 +665,6 @@ def main():
 
     new_posts = 0
     tsm = datetime.now(zoneinfo.ZoneInfo(TIMEZONE)).strftime("%Y-%m-%d")
-    live_poll_state = load_live_poll_state()
-    live_poll_state = clean_live_poll_state(live_poll_state)
 
     for video_id in candidates_to_check:
         if new_posts >= MAX_POSTS_PER_RUN:
@@ -751,19 +721,27 @@ def main():
             except Exception as e:
                 print(f"Реакция: {e}", file=sys.stderr)
 
-            # ФИКС: добавляем и upcoming, и live в очередь опроса
+            # Опрос отправляем сразу вместе с анонсом (не дожидаясь начала стрима)
             if ctype in ("live", "upcoming"):
-                if video_id not in live_poll_state:
-                    live_poll_state[video_id] = {
-                        "announced_at": datetime.now(timezone.utc).isoformat(),
-                        "poll_sent": False,
-                        "poll_message_id": None,
-                        "title": title,
-                    }
-                    # Для upcoming сохраняем scheduled_start — от него считаем 5 минут
-                    if ctype == "upcoming" and scheduled_start_raw:
-                        live_poll_state[video_id]["scheduled_start"] = scheduled_start_raw
-                    print(f"📝 {ctype.upper()} {video_id} добавлен в очередь опроса")
+                poll_cfg = detect_game_for_poll(title)
+                if poll_cfg:
+                    try:
+                        print(f"📊 Опрос для {video_id}: {poll_cfg['question']}")
+                        pres = send_telegram_poll(TELEGRAM_CHAT_ID,
+                                                   poll_cfg["question"],
+                                                   poll_cfg["options"],
+                                                   allows_multiple=True)
+                        increment_posts(stats)
+                        print(f"✅ Опрос отправлен: {poll_cfg['question']}")
+                        try:
+                            react_to_message(TELEGRAM_CHAT_ID, pres["result"]["message_id"], "🤩")
+                        except Exception as e:
+                            print(f"Реакция на опрос: {e}", file=sys.stderr)
+                    except Exception as e:
+                        print(f"❌ Ошибка опроса {video_id}: {e}", file=sys.stderr)
+                        increment_errors(stats)
+                else:
+                    print(f"ℹ️ Нет конфига опроса для '{title}' ({video_id})")
         except Exception as e:
             print(f"❌ Ошибка Telegram {video_id}: {e}", file=sys.stderr)
             increment_errors(stats); continue
@@ -775,48 +753,6 @@ def main():
 
     save_posted_ids(posted_ids)
     print(f"Готово. Новых: {new_posts}")
-
-    # --- Send delayed polls ---
-    now_utc = datetime.now(timezone.utc)
-    for vid, st in list(live_poll_state.items()):
-        if st.get("poll_sent"): continue
-
-        # ФИКС: для upcoming считаем от scheduled_start, для live — от announced_at
-        try:
-            if st.get("scheduled_start"):
-                start_dt = datetime.fromisoformat(st["scheduled_start"].replace("Z", "+00:00"))
-                elapsed = (now_utc - start_dt).total_seconds()
-            else:
-                start_dt = datetime.fromisoformat(st["announced_at"])
-                elapsed = (now_utc - start_dt).total_seconds()
-        except (ValueError, TypeError):
-            continue
-
-        if elapsed >= _POLL_DELAY_SECONDS:
-            poll_cfg = detect_game_for_poll(st.get("title",""))
-            if poll_cfg:
-                try:
-                    print(f"📊 Опрос для {vid}: {poll_cfg['question']}")
-                    pres = send_telegram_poll(TELEGRAM_CHAT_ID,
-                                               poll_cfg["question"],
-                                               poll_cfg["options"],
-                                               allows_multiple=True)
-                    st["poll_sent"] = True
-                    st["poll_message_id"] = pres["result"]["message_id"]
-                    increment_posts(stats)
-                    print(f"✅ Опрос отправлен: {poll_cfg['question']}")
-                    try:
-                        react_to_message(TELEGRAM_CHAT_ID, pres["result"]["message_id"], "🤩")
-                    except Exception as e:
-                        print(f"Реакция на опрос: {e}", file=sys.stderr)
-                except Exception as e:
-                    print(f"❌ Ошибка опроса {vid}: {e}", file=sys.stderr)
-                    increment_errors(stats)
-            else:
-                print(f"ℹ️ Нет конфига опроса для '{st.get('title','')}' ({vid})")
-                st["poll_sent"] = True
-
-    save_live_poll_state(live_poll_state)
 
     check_subscriber_milestone(stats)
     save_stats(stats)
