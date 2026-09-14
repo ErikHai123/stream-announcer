@@ -293,6 +293,22 @@ def detect_theme_emoji(title):
         if kw in lowered: return em
     return DEFAULT_THEME_EMOJI
 
+GAME_DISPLAY_NAMES = {
+    "gta":"GTA", "гта":"GTA", "farcry":"Far Cry", "far cry":"Far Cry", "cyberpunk":"Cyberpunk",
+    "cs2":"CS2", "csgo":"CS:GO", "cs 1.6":"CS 1.6", "counter-strike":"Counter-Strike",
+    "minecraft":"Minecraft", "майнкрафт":"Minecraft", "f1":"F1", "formula":"Formula 1", "fifa":"FIFA",
+    "repo":"Repo", "battlefield":"Battlefield", "valorant":"Valorant", "dota":"Dota", "fortnite":"Fortnite",
+    "warzone":"Warzone", "elden ring":"Elden Ring", "stalker":"Stalker", "roblox":"Roblox", "apex":"Apex",
+    "overwatch":"Overwatch", "wow":"WoW", "world of warcraft":"World of Warcraft", "rocket league":"Rocket League",
+    "fall guys":"Fall Guys", "among us":"Among Us",
+}
+
+def detect_game_name(title):
+    lowered = title.lower()
+    for kw, name in GAME_DISPLAY_NAMES.items():
+        if kw in lowered: return name
+    return None
+
 # ---------- Poll config ----------
 GAME_POLL_CONFIG = {
     "gta": {"question":"🚗 Какие карты сегодня будем проходить?",
@@ -424,13 +440,48 @@ RANDOM_TEMPLATES = [
     "{emoji} «{title}» — классика от {channel}\nПересмотри, если уже видел, или смотри впервые!",
     "{emoji} Рандомный ролик: «{title}»\n{channel} — заходи, не пожалеешь",
     "{emoji} Внезапно: «{title}» от {channel}!\nОтличный повод вернуться к старым видео",
+    "{emoji} Архив ожил! «{title}» от {channel}\nЗабытая жемчужина, го пересматривать",
+    "{emoji} А вы помните это? «{title}»\n{channel} — идеально зайдёт под чай ☕",
+    "{emoji} Раскопали в архивах: «{title}»\nОт {channel} — заслуживает второго просмотра",
+    "{emoji} Пятничный (ну или любой) флешбек: «{title}»\n{channel} — заходи вспомнить",
+    "{emoji} Один из тех роликов, что стоит пересмотреть: «{title}»\nОт {channel} 👇",
+    "{emoji} Стоп, а ты это видел? «{title}»\n{channel} ждёт на просмотре",
+    "{emoji} Возвращаем в ленту: «{title}»\nОт {channel} — незаслуженно забытое видео",
+    "{emoji} Ролик дня из закромов: «{title}»\n{channel} — залетай, не пожалеешь!",
 ]
+
+RANDOM_TEMPLATES_GAME = [
+    "{emoji} Вспоминаем {game}! «{title}» от {channel}\nЕсли пропустил — самое время наверстать 👇",
+    "{emoji} Го пересмотрим {game}: «{title}»\n{channel} — залетай, это того стоит!",
+    "{emoji} Ламповый {game}-ролик на пересмотр: «{title}»\nОт {channel} — заходи!",
+    "{emoji} {game} не стареет: «{title}»\n{channel} ждёт тебя на просмотре",
+    "{emoji} Ретро {game} из архивов: «{title}»\nОт {channel} — самое время пересмотреть!",
+    "{emoji} Для фанатов {game}: «{title}»\n{channel} — залетай вспомнить хорошие моменты",
+    "{emoji} {game}-флешбек дня: «{title}»\nОт {channel} — не проходи мимо",
+]
+
+RANDOM_BUTTON_LABELS = [
+    "▶️ Смотреть на YouTube",
+    "🎬 Пересмотреть",
+    "👀 Глянуть видео",
+    "📺 Открыть видео",
+    "🍿 Смотреть",
+]
+
+RANDOM_REACTIONS = ["❤️", "🔥", "🎉", "🤩", "👍", "😁"]
 
 def generate_announcement_text(content_type, title, channel_title, start_time_str=""):
     tm = {"live":LIVE_TEMPLATES,"upcoming":UPCOMING_TEMPLATES,
           "video":VIDEO_TEMPLATES,"shorts":SHORTS_TEMPLATES,"random":RANDOM_TEMPLATES}
-    tpl = random.choice(tm[content_type])
-    return tpl.format(channel=channel_title, title=title, when=start_time_str, emoji=detect_theme_emoji(title))
+    pool = tm[content_type]
+    game_name = None
+    if content_type == "random":
+        game_name = detect_game_name(title)
+        if game_name:
+            pool = RANDOM_TEMPLATES + RANDOM_TEMPLATES_GAME
+    tpl = random.choice(pool)
+    return tpl.format(channel=channel_title, title=title, when=start_time_str,
+                       emoji=detect_theme_emoji(title), game=game_name or "")
 
 # ---------- Telegram ----------
 def send_telegram_message(chat_id, text):
@@ -587,11 +638,12 @@ def main():
                     thumb = best_thumbnail(snip["thumbnails"])
                     text = generate_announcement_text("random", title, chtitle)
                     link = f"https://www.youtube.com/watch?v={rvid}"
-                    res = send_telegram_photo(thumb, text, [{"text":"▶️ YouTube","url":link}])
+                    button_label = random.choice(RANDOM_BUTTON_LABELS)
+                    res = send_telegram_photo(thumb, text, [{"text":button_label,"url":link}])
                     print(f"✅ Рандом опубликован: {title}")
                     increment_posts(stats)
                     try:
-                        react_to_message(TELEGRAM_CHAT_ID, res["result"]["message_id"], "❤️")
+                        react_to_message(TELEGRAM_CHAT_ID, res["result"]["message_id"], random.choice(RANDOM_REACTIONS))
                     except Exception as e:
                         print(f"Реакция не поставлена: {e}", file=sys.stderr)
                     posted_ids[rvid] = today_str; save_posted_ids(posted_ids)
@@ -754,7 +806,7 @@ def main():
                     increment_posts(stats)
                     print(f"✅ Опрос отправлен: {poll_cfg['question']}")
                     try:
-                        react_to_message(TELEGRAM_CHAT_ID, pres["result"]["message_id"], "📊")
+                        react_to_message(TELEGRAM_CHAT_ID, pres["result"]["message_id"], "🤩")
                     except Exception as e:
                         print(f"Реакция на опрос: {e}", file=sys.stderr)
                 except Exception as e:
